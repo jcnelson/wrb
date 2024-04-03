@@ -19,10 +19,10 @@ use std::fs;
 
 use rand::Rng;
 
-use rusqlite::NO_PARAMS;
 use rusqlite::Connection;
+use rusqlite::NO_PARAMS;
 
-use crate::storage::util::*;
+use crate::vm::storage::util::*;
 
 use clarity::vm::database::HeadersDB;
 
@@ -32,11 +32,11 @@ use stacks_common::types::chainstate::ConsensusHash;
 use stacks_common::types::chainstate::StacksAddress;
 use stacks_common::types::chainstate::StacksBlockId;
 use stacks_common::types::chainstate::VRFSeed;
-use stacks_common::util::hash::{Sha512Trunc256Sum, Hash160};
+use stacks_common::util::hash::{Hash160, Sha512Trunc256Sum};
 
 use stacks_common::util::get_epoch_time_secs;
 
-use crate::storage::WrbHeadersDB;
+use crate::vm::storage::WrbHeadersDB;
 
 /// Boilerplate implementation so we can interface the wrb DB with Clarity
 impl HeadersDB for WrbHeadersDB {
@@ -129,5 +129,3 @@ impl HeadersDB for WrbHeadersDB {
         get_wrb_block_height(&self.conn(), id_bhh).map(|_| 1)
     }
 }
-
-

@@ -1,4 +1,3 @@
-// Copyright (C) 2013-2020 Blockstack PBC, a public benefit corporation
 // Copyright (C) 2020-2022 Stacks Open Internet Foundation
 // Copyright (C) 2022 Jude Nelson
 //
@@ -15,52 +14,55 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::error;
-use std::io::Error as io_error;
-use std::fmt;
 use std::convert::From;
+use std::error;
+use std::fmt;
+use std::io::Error as io_error;
 
-use rusqlite::Error as sqlite_error;
-use rusqlite::Connection;
 use clarity::{
     vm::analysis,
     vm::analysis::{errors::CheckError, ContractAnalysis},
-    vm::ast::ASTRules,
     vm::ast::build_ast_with_rules,
-    vm::contexts::{OwnedEnvironment},
+    vm::ast::ASTRules,
+    vm::contexts::OwnedEnvironment,
     vm::costs::LimitedCostTracker,
-    vm::database::{
-        NULL_BURN_STATE_DB,
-    },
+    vm::database::NULL_BURN_STATE_DB,
     vm::errors::{Error as ClarityVMError, RuntimeErrorType},
+    vm::representations::ClarityName,
     vm::types::{QualifiedContractIdentifier, StandardPrincipalData},
     vm::ContractName,
-    vm::{SymbolicExpression},
-    vm::representations::ClarityName,
+    vm::SymbolicExpression,
 };
+use rusqlite::Connection;
+use rusqlite::Error as sqlite_error;
 
 use stacks_common::util::log;
 
+use crate::util::{DEFAULT_CHAIN_ID, DEFAULT_WRB_CLARITY_VERSION, DEFAULT_WRB_EPOCH};
 use clarity::boot_util::boot_code_addr;
-use crate::util::{DEFAULT_WRB_EPOCH, DEFAULT_WRB_CLARITY_VERSION, DEFAULT_CHAIN_ID};
 
-use clarity::vm::database::HeadersDB;
+use clarity::vm::analysis::AnalysisDatabase;
 use clarity::vm::database::BurnStateDB;
 use clarity::vm::database::ClarityDatabase;
-use clarity::vm::analysis::AnalysisDatabase;
+use clarity::vm::database::HeadersDB;
 
-use crate::storage;
+use crate::vm::storage;
 
+use crate::vm::storage::util::*;
+use crate::vm::storage::ReadOnlyWrbStore;
+use crate::vm::storage::WritableWrbStore;
+use crate::vm::storage::{WrbDB, WrbHeadersDB};
 use crate::vm::ClarityStorage;
 use crate::vm::ClarityVM;
-use crate::storage::ReadOnlyWrbStore;
-use crate::storage::WritableWrbStore;
-use crate::storage::{WrbDB, WrbHeadersDB};
-use crate::storage::util::*;
+
+use crate::vm::Error;
+use crate::vm::WRB_LOW_LEVEL_CONTRACT;
 
 use stacks_common::types::chainstate::StacksBlockId;
-
+use stacks_common::util::hash::to_hex;
 use stacks_common::util::hash::Hash160;
+
+use crate::core::with_global_config;
 
 use crate::vm::BOOT_CODE;
 use crate::vm::{BOOT_BLOCK_ID, GENESIS_BLOCK_ID};
@@ -96,6 +98,7 @@ pub fn run_analysis_free<C: ClarityStorage>(
         &mut clarity_kv.get_analysis_db(),
         save_contract,
         LimitedCostTracker::new_free(),
+        DEFAULT_WRB_EPOCH,
         DEFAULT_WRB_CLARITY_VERSION,
     )
 }
@@ -129,27 +132,85 @@ impl ClarityStorage for ReadOnlyWrbStore<'_> {
 }
 
 impl ClarityVM {
-    pub fn new(db_path: &str, domain: &str) -> Result<ClarityVM, storage::Error> {
+    pub fn new(db_path: &str, domain: &str) -> Result<ClarityVM, Error> {
         let wrbdb = WrbDB::open(db_path, domain, None)?;
+        let mainnet = with_global_config(|cfg| cfg.mainnet())
+            .ok_or(Error::NotInitialized)?;
+        
+        let mut parts = domain.split(".");
+        let Some(name) = parts.next() else {
+            return Err(Error::InvalidInput("Invalid BNS name".into()));
+        };
+        let Some(namespace) = parts.next() else {
+            return Err(Error::InvalidInput("Invalid BNS name".into()));
+        };
+        if parts.next().is_some() {
+            return Err(Error::InvalidInput("Invalid BNS name".into()));
+        }
+
         let mut vm = ClarityVM {
-            db: wrbdb
+            db: wrbdb,
+            mainnet,
+            app_name: name.to_string(),
+            app_namespace: namespace.to_string(),
         };
 
-        vm.install_boot_code(BOOT_CODE);
+        vm.install_boot_code(BOOT_CODE)?;
         Ok(vm)
     }
 
     /// Start working on the next iteration of loading up the wrb page
-    pub fn begin_page_load<'a>(&'a mut self) -> WritableWrbStore<'a> {
+    pub fn begin_page_load<'a>(&'a mut self, code_hash: &Hash160) -> Result<WritableWrbStore<'a>, Error> {
         let cur_tip = get_wrb_chain_tip(self.db.conn());
-        let cur_height = get_wrb_block_height(self.db.conn(), &cur_tip)
-            .expect(&format!("FATAL: failed to determine height of {}", &cur_tip));
+        let cur_height = get_wrb_block_height(self.db.conn(), &cur_tip).expect(&format!(
+            "FATAL: failed to determine height of {}",
+            &cur_tip
+        ));
         let next_tip = make_wrb_chain_tip(cur_height + 1);
 
-        debug!("Begin page load {},{} -> {},{}", &cur_tip, cur_height, &next_tip, cur_height + 1);
-        self.db.begin(&cur_tip, &next_tip)
+        debug!(
+            "Begin page load {},{} -> {},{}",
+            &cur_tip,
+            cur_height,
+            &next_tip,
+            cur_height + 1
+        );
+        
+        let mainnet = self.mainnet;
+        let ll_contract_id = QualifiedContractIdentifier::new(
+            boot_code_addr(mainnet).into(),
+            ContractName::try_from(WRB_LOW_LEVEL_CONTRACT).unwrap(),
+        );
+        let headers_db = self.db.headers_db();
+        let mut write_tx = self.db.begin(&cur_tip, &next_tip);
+        let mut db = write_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
+
+        db.begin();
+        let mut vm_env =
+            OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+        let (contract, _, _) = vm_env.execute_in_env(
+            StandardPrincipalData::transient().into(),
+            None,
+            None,
+            |env| env.global_context.database.get_contract(&ll_contract_id),
+        )?;
+
+        let code = format!(r#"(set-app-code-hash 0x{})"#, code_hash);
+        vm_env.execute_in_env(
+            StandardPrincipalData::transient().into(),
+            None,
+            Some(contract.contract_context),
+            |env| env.eval_raw_with_rules(&code, ASTRules::PrecheckSize),
+        )?;
+
+        let (mut db, _) = vm_env
+            .destruct()
+            .expect("Failed to recover database reference after executing transaction");
+
+        db.commit()?;
+        Ok(write_tx)
     }
-    
+
     /// Start working on the next iteration of loading up the wrb page, but in a read-only manner
     pub fn begin_read_only<'a>(&'a mut self) -> ReadOnlyWrbStore<'a> {
         let cur_tip = get_wrb_chain_tip(self.db.conn());
@@ -163,14 +224,14 @@ impl ClarityVM {
     }
 
     /// Does there exist a code body with this ID?
-    pub fn has_code(&mut self, code_id: &QualifiedContractIdentifier) -> bool {
+    pub fn has_code(&mut self, code_id: &QualifiedContractIdentifier) -> Result<bool, Error> {
         let headers_db = self.db.headers_db();
         let mut wrb_read = self.begin_read_only();
         let mut db = wrb_read.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
         db.begin();
         let res = db.has_contract(code_id);
-        db.roll_back();
-        res
+        db.roll_back()?;
+        Ok(res)
     }
 
     /// Instantiate a HeadersDB
@@ -179,16 +240,30 @@ impl ClarityVM {
     }
 
     /// Set up the wrb boot code
-    fn install_boot_code(&mut self, boot_code: &[(&str, &str)]) {
+    fn install_boot_code(&mut self, boot_code: &[(&str, &str)]) -> Result<(), Error> {
+        let mainnet = self.mainnet;
+        let name = self.app_name.clone();
+        let namespace = self.app_namespace.clone();
+
         let headers_db = self.headers_db();
         let mut write_tx = self.db.begin(&BOOT_BLOCK_ID, &GENESIS_BLOCK_ID);
 
         for (boot_code_name, boot_code_contract) in boot_code.iter() {
             let contract_identifier = QualifiedContractIdentifier::new(
-                boot_code_addr(true).into(),
+                boot_code_addr(mainnet).into(),
                 ContractName::try_from(boot_code_name.to_string()).unwrap(),
             );
             let contract_content = *boot_code_contract;
+
+            // sanity check -- don't do this more than once
+            let mut db = write_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
+            db.begin();
+            let has_contract = db.has_contract(&contract_identifier);
+            db.roll_back()?;
+
+            if has_contract {
+                continue;
+            }
 
             debug!(
                 "Instantiate boot code contract '{}' ({} bytes)...",
@@ -196,35 +271,73 @@ impl ClarityVM {
                 boot_code_contract.len()
             );
 
-            let mut ast = parse(&contract_identifier, &contract_content)
-                .expect("Failed to parse program");
+            let mut ast =
+                parse(&contract_identifier, &contract_content).expect("Failed to parse program");
 
-            let analysis_result = run_analysis_free(&contract_identifier, &mut ast, &mut write_tx, true);
-            match analysis_result {
-                Ok(_) => {
-                    let db = write_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
-                    let mut vm_env = OwnedEnvironment::new_free(
-                        true,
-                        DEFAULT_CHAIN_ID,
-                        db,
-                        DEFAULT_WRB_EPOCH,
-                    );
-                    vm_env
-                        .initialize_versioned_contract(
-                            contract_identifier.clone(),
-                            DEFAULT_WRB_CLARITY_VERSION,
-                            &contract_content,
-                            None,
-                            ASTRules::PrecheckSize
-                        )
-                        .expect(&format!("FATAL: failed to initialize boot contract '{}'", &contract_identifier));
-                }
-                Err(_) => {
-                    panic!("failed to instantiate boot contract");
-                }
-            };
+            debug!("Analyze contract {}", &contract_identifier);
+            run_analysis_free(&contract_identifier, &mut ast, &mut write_tx, true).expect(
+                &format!("FATAL: failed to analyze {}", &contract_identifier),
+            );
+
+            debug!("Deploy contract {}", &contract_identifier);
+            let mut db = write_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
+            db.begin();
+            let mut vm_env =
+                OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+            vm_env
+                .initialize_versioned_contract(
+                    contract_identifier.clone(),
+                    DEFAULT_WRB_CLARITY_VERSION,
+                    &contract_content,
+                    None,
+                    ASTRules::PrecheckSize,
+                )
+                .expect(&format!(
+                    "FATAL: failed to initialize boot contract '{}'",
+                    &contract_identifier
+                ));
+
+            let (mut db, _) = vm_env
+                .destruct()
+                .expect("Failed to recover database reference after executing transaction");
+
+            db.commit()?;
         }
-        write_tx.commit_to(&GENESIS_BLOCK_ID);
+
+        // set domain name and code hash
+        debug!("Set app name to {}.{}", name, namespace);
+
+        let ll_contract_id = QualifiedContractIdentifier::new(
+            boot_code_addr(mainnet).into(),
+            ContractName::try_from(WRB_LOW_LEVEL_CONTRACT).unwrap(),
+        );
+
+        let mut db = write_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
+        db.begin();
+        let mut vm_env =
+            OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+        let (contract, _, _) = vm_env.execute_in_env(
+            StandardPrincipalData::transient().into(),
+            None,
+            None,
+            |env| env.global_context.database.get_contract(&ll_contract_id),
+        )?;
+
+        let code = format!(r#"(set-app-name {{ name: 0x{}, namespace: 0x{} }})"#, to_hex(name.as_bytes()), to_hex(namespace.as_bytes()));
+        vm_env.execute_in_env(
+            StandardPrincipalData::transient().into(),
+            None,
+            Some(contract.contract_context),
+            |env| env.eval_raw_with_rules(&code, ASTRules::PrecheckSize),
+        )?;
+
+        let (mut db, _) = vm_env
+            .destruct()
+            .expect("Failed to recover database reference after executing transaction");
+
+        db.commit()?;
+
+        write_tx.commit_to(&GENESIS_BLOCK_ID)?;
+        Ok(())
     }
 }
-

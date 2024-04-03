@@ -1,6 +1,6 @@
 // Copyright (C) 2013-2020 Blockstack PBC, a public benefit corporation
-// Copyright (C) 2020-2022 Stacks Open Internet Foundation
-// Copyright (C) 2022 Jude Nelson
+// Copyright (C) 2020-2023 Stacks Open Internet Foundation
+// Copyright (C) 2023 Jude Nelson
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -15,258 +15,219 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::fs;
+use crate::core;
 use crate::ui::Renderer;
 use crate::vm::ClarityVM;
+use std::fs;
+
+use stacks_common::util::hash::to_hex;
 
 #[test]
 fn test_render_codec() {
+    core::init(false, "localhost", 20443);
+
     let txt = "hello world!";
     let renderer = Renderer::new(1024);
-    let bytes = renderer.encode_bytes(txt.as_bytes()).unwrap();
-    
+    let bytes = Renderer::encode_bytes(txt.as_bytes()).unwrap();
+
     let mut bytes_decoded = vec![];
-    renderer.decode(&mut &bytes[..], &mut bytes_decoded).unwrap();
+    renderer
+        .decode(&mut &bytes[..], &mut bytes_decoded)
+        .unwrap();
     let s = std::str::from_utf8(&bytes_decoded).unwrap();
 
     assert_eq!(&s, &txt);
 }
 
 #[test]
-fn test_render_eval_hello_world() {
+fn test_render_viewports_raw_text() {
+    core::init(false, "localhost", 20443);
+
     let db_path = "/tmp/wrb-render-eval-hello-world";
     if fs::metadata(&db_path).is_ok() {
         fs::remove_dir_all(&db_path).unwrap();
     }
 
+    let code = r#"
+(wrb-root u80 u60)
+(wrb-viewport u0 u5 u5 u25 u25)
+(wrb-viewport u1 u20 u20 u25 u25)
+(wrb-viewport u2 u35 u35 u25 u25)
+(wrb-raw-txt u0 u0 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u1 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u2 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u3 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u4 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u5 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u6 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u7 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u8 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u9 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u10 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u11 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u12 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u13 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u14 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u15 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u16 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u17 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u18 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-raw-txt u0 u0 u19 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+
+(wrb-raw-txt u1 u0 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u1 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u2 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u3 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u4 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u5 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u6 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u7 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u8 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u9 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u10 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u11 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u12 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u13 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u14 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u15 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u16 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u17 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u18 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-raw-txt u1 u0 u19 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+
+(wrb-raw-txt u2 u0 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u1 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u2 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u3 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u4 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u5 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u6 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u7 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u8 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u9 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u10 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u11 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u12 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u13 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u14 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u15 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u16 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u17 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u18 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-raw-txt u2 u0 u19 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+"#;
+    let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
+
     let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
-    let input = r#"
-```wrb:main
-(print "hello world")
-(define-public (foo)
-    (ok (print "foo")))
-```
-Hello Markdown!
-```wrb
-(foo)
-```
-    "#;
+    let mut renderer = Renderer::new(1_000_000_000);
+    let s = renderer.eval_to_string(&mut vm, &bytes).unwrap();
+    println!("{}", &s); 
     
-    let mut renderer = Renderer::new(1024);
-    let s = renderer.eval_to_string(&mut vm, &input).unwrap();
-    eprintln!("<<<<<\n{}>>>>>", &s);
+    let mut vm = ClarityVM::new(db_path, "foo-test.btc").unwrap();
+    let mut renderer = Renderer::new(1_000_000_000);
+    let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
+    println!("{}", &s);
 }
 
 #[test]
-fn test_render_eval_headings() {
-    let db_path = "/tmp/wrb-render-eval-headings";
+fn test_render_viewports_wrapped_text() {
+    core::init(false, "localhost", 20443);
+
+    let db_path = "/tmp/wrb-render-eval-hello-world-wrapped";
     if fs::metadata(&db_path).is_ok() {
         fs::remove_dir_all(&db_path).unwrap();
     }
+    
+    let code = r#"
+(wrb-root u80 u60)
+(wrb-viewport u0 u5 u5 u25 u25)
+(wrb-viewport u1 u20 u20 u25 u25)
+(wrb-viewport u2 u35 u35 u25 u25)
+
+(wrb-raw-print u0 none u0 (buff-to-uint-be 0x0000ff) u"This is the blue song that never ends.  ")
+(wrb-raw-print u1 none u0 (buff-to-uint-be 0x00ff00) u"This is the green song that never ends.  ")
+(wrb-raw-print u2 none u0 (buff-to-uint-be 0xff0000) u"This is the red song that never ends.  ")
+
+(wrb-raw-println u0 none u0 (buff-to-uint-be 0x0000ff) u"Yes, it goes on and on, my friends.")
+(wrb-raw-println u1 none u0 (buff-to-uint-be 0x00ff00) u"Yes, it goes on and on, my friends.")
+(wrb-raw-println u2 none u0 (buff-to-uint-be 0xff0000) u"Yes, it goes on and on, my friends.")
+
+(wrb-raw-print u0 none u0 (buff-to-uint-be 0x0000ff) u"Some people started signing it, not knowing what it was...")
+(wrb-raw-print u1 none u0 (buff-to-uint-be 0x00ff00) u"Some people started signing it, not knowing what it was...")
+(wrb-raw-print u2 none u0 (buff-to-uint-be 0xff0000) u"Some people started singing it, not knowing what it was...")
+"#;
+
+    let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
 
     let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
-    let input = r##########"
-```wrb:main
-(print "hello world")
-(define-public (foo)
-    (begin
-        (print "# H1")
-        (print "## H2")
-        (print "### H3")
-        (print "#### H4")
-        (print "##### H5")
-        (print "###### H6")
-    (ok (print "foo"))))
-```
-Hello Markdown!
-```wrb
-(foo)
-```
-    "##########;
+    let mut renderer = Renderer::new(1_000_000_000);
+    let s = renderer.eval_to_string(&mut vm, &bytes).unwrap();
+    println!("{}", &s);
     
-    let mut renderer = Renderer::new(1024);
-    let s = renderer.eval_to_string(&mut vm, &input).unwrap();
-    eprintln!("<<<<<\n{}>>>>>", &s);
+    let mut vm = ClarityVM::new(db_path, "foo-test.btc").unwrap();
+    let mut renderer = Renderer::new(1_000_000_000);
+    let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
+
+    assert_eq!(s,
+"                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+     This is the blue song                                                      
+     that never ends.  Yes,                                                     
+     it goes on and on, my                                                      
+     friends.                                                                   
+     Some people started                                                        
+     signing it, not knowing                                                    
+     what it was...                                                             
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                    This is the green song                                      
+                    that never ends.  Yes,                                      
+                    it goes on and on, my                                       
+                    friends.                                                    
+                    Some people started                                         
+                    signing it, not knowing                                     
+                    what it was...                                              
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                   This is the red song                         
+                                   that never ends.  Yes,                       
+                                   it goes on and on, my                        
+                                   friends.                                     
+                                   Some people started                          
+                                   singing it, not knowing                      
+                                   what it was...                               
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                ");
 }
-
-#[test]
-fn test_render_eval_block_quote() {
-    let db_path = "/tmp/wrb-render-eval-block-quote";
-    if fs::metadata(&db_path).is_ok() {
-        fs::remove_dir_all(&db_path).unwrap();
-    }
-
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
-    let input = r##########"
-```wrb:main
-(print "hello world")
-(define-public (foo)
-    (begin
-        (print "> level 1")
-        (print "> > level 2")
-        (print ">>> level 3")
-        (print ">>> > level 4")
-    (ok (print "foo"))))
-```
-Hello Markdown!
-```wrb
-(foo)
-```
-    "##########;
-    
-    let mut renderer = Renderer::new(1024);
-    let s = renderer.eval_to_string(&mut vm, &input).unwrap();
-    eprintln!("<<<<<\n{}>>>>>", &s);
-}
-
-#[test]
-fn test_render_eval_code_block() {
-    let db_path = "/tmp/wrb-render-eval-code-block";
-    if fs::metadata(&db_path).is_ok() {
-        fs::remove_dir_all(&db_path).unwrap();
-    }
-
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
-    let input = r##########"
-```wrb:main
-(print "hello world")
-(define-public (foo)
-    (begin
-        (print "```")
-        (print "echo 'hello world'")
-        (print "```")
-        (print "```bash")
-        (print "echo 'hello world with fence'")
-        (print "```")
-        (print "```wrb")
-        (print "echo 'hello wrb fence'")
-        (print "```")
-        (print "```bash")
-        (print "```inner-bash")
-        (print "do nested code block fences work lol")
-        (print "```")
-        (print "```")
-    (ok (print "foo"))))
-```
-Hello Markdown!
-```wrb
-(foo)
-```
-    "##########;
-    
-    let mut renderer = Renderer::new(1024);
-    let s = renderer.eval_to_string(&mut vm, &input).unwrap();
-    eprintln!("<<<<<\n{}>>>>>", &s);
-}
-
-#[test]
-fn test_render_eval_list() {
-    let db_path = "/tmp/wrb-render-eval-list";
-    if fs::metadata(&db_path).is_ok() {
-        fs::remove_dir_all(&db_path).unwrap();
-    }
-
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
-    let input = r##########"
-```wrb:main
-(print "hello world")
-(define-public (foo)
-    (begin
-        (print "1. first item")
-        (print "2. second item")
-        (print "3. third item")
-        (print "---")
-        (print "10. tenth item")
-        (print "10. eleventh item")
-        ;; what the fuck?
-        (print "  30. nested item 30")
-        (print "  30. nested item 31")
-        (print "  30. nested item 32")
-        (print "10. twelfth item")
-    (ok (print "foo"))))
-```
-Hello Markdown!
-```wrb
-(foo)
-```
-    "##########;
-    
-    let mut renderer = Renderer::new(1024);
-    let s = renderer.eval_to_string(&mut vm, &input).unwrap();
-    eprintln!("<<<<<\n{}>>>>>", &s);
-}
-
-#[test]
-fn test_render_eval_table() {
-    let db_path = "/tmp/wrb-render-eval-list";
-    if fs::metadata(&db_path).is_ok() {
-        fs::remove_dir_all(&db_path).unwrap();
-    }
-
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
-    let input = r##########"
-```wrb:main
-(print "hello world")
-(define-public (foo)
-    (begin
-        (print "")
-        (print "before the table")
-        (print "")
-        (print "| Syntax      | Description | Test Text     |")
-        (print "| :---        |    :----:   |          ---: |")
-        (print "| Header      | Title       | Here's this   |")
-        (print "| Paragraph   | Text        | And more      |")
-        (print "")
-        (print "after the table")
-        (print "")
-        (print "| Syntax      | Description | Test Text     |")
-        (print "| ---         |    ----     |          ---  |")
-        (print "| Header      | Title       | Here's this   |")
-        (print "| Paragraph   | Text        | And more      |")
-        (print "")
-        (print "after the second table")
-        (print "")
-    (ok (print "foo"))))
-```
-Hello Markdown!
-```wrb
-(foo)
-```
-    "##########;
-    
-    let mut renderer = Renderer::new(1024);
-    let s = renderer.eval_to_string(&mut vm, &input).unwrap();
-    eprintln!("<<<<<\n{}>>>>>", &s);
-}
-
-#[test]
-fn test_render_eval_formatters() {
-    let db_path = "/tmp/wrb-render-eval-list";
-    if fs::metadata(&db_path).is_ok() {
-        fs::remove_dir_all(&db_path).unwrap();
-    }
-
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
-    let input = r##########"
-```wrb:main
-(print "hello world")
-(define-public (foo)
-    (begin
-        (print "*emphasis*")
-        (print "_emphasis_")
-        (print "**bold**")
-        (print "~~strikethrough~~")
-    (ok (print "foo"))))
-```
-Hello Markdown!
-```wrb
-(foo)
-```
-    "##########;
-    
-    let mut renderer = Renderer::new(1024);
-    let s = renderer.eval_to_string(&mut vm, &input).unwrap();
-    eprintln!("<<<<<\n{}>>>>>", &s);
-}
-
 

@@ -16,120 +16,298 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use lzma_rs;
-use pulldown_cmark;
-use pulldown_cmark::Parser as CMParser;
-use pulldown_cmark::Options as CMOpts;
-use pulldown_cmark::Event as CMEvent;
-use pulldown_cmark::Tag as CMTag;
-use pulldown_cmark::CodeBlockKind as CMCodeBlockKind;
-use pulldown_cmark::LinkType as CMLinkType;
-use pulldown_cmark::HeadingLevel as CMHeadingLevel;
-use pulldown_cmark::Alignment as CMAlignment;
 
-use std::io::{BufRead, Write};
-use std::ops::Deref;
 use std::collections::HashSet;
+use std::collections::HashMap;
+use std::io::{BufRead, Read, Write};
+use std::ops::Deref;
 
-use crate::ui::Renderer;
 use crate::ui::Error;
-use crate::ui::TableState;
+use crate::ui::Renderer;
 
-use crate::storage::WritableWrbStore;
-use crate::util::{DEFAULT_WRB_EPOCH, DEFAULT_WRB_CLARITY_VERSION, DEFAULT_CHAIN_ID};
+use crate::vm::storage::WritableWrbStore;
+use crate::util::{DEFAULT_CHAIN_ID, DEFAULT_WRB_CLARITY_VERSION, DEFAULT_WRB_EPOCH};
 
-use clarity::vm::ast::ASTRules;
 use clarity::vm::analysis;
-use clarity::vm::costs::LimitedCostTracker;
-use clarity::vm::SymbolicExpression;
-use clarity::vm::types::QualifiedContractIdentifier;
+use clarity::vm::ast::ASTRules;
 use clarity::vm::contexts::OwnedEnvironment;
-use clarity::vm::events::{
-    StacksTransactionEvent,
-    SmartContractEventData
-};
+use clarity::vm::costs::LimitedCostTracker;
+use clarity::vm::events::{SmartContractEventData, StacksTransactionEvent};
+use clarity::vm::types::QualifiedContractIdentifier;
 use clarity::vm::types::StandardPrincipalData;
-use clarity::vm::types::{Value, CharType, SequenceData};
+use clarity::vm::types::{CharType, SequenceData, Value, UTF8Data};
+use clarity::vm::SymbolicExpression;
 
 use crate::vm::ClarityStorage;
 
 use crate::vm::{
-    ClarityVM,
-    clarity_vm::parse as clarity_parse,
-    clarity_vm::run_analysis_free as clarity_analyze
+    clarity_vm::parse as clarity_parse, clarity_vm::run_analysis_free as clarity_analyze,
+    ClarityVM, WRBLIB_CODE,
 };
 
 use clarity::vm::errors::Error as clarity_error;
-
-use clarity::vm::database::{
-    HeadersDB,
-    NULL_BURN_STATE_DB,
-};
+use clarity::vm::errors::InterpreterError;
+use clarity::vm::database::{HeadersDB, NULL_BURN_STATE_DB};
 
 use stacks_common::util::hash;
+use stacks_common::util::hash::Hash160;
+use stacks_common::util::retry::BoundReader;
+
+use crate::ui::root::Root;
+use crate::ui::scanline::Scanline;
+use crate::ui::viewport::Viewport;
+use crate::ui::charbuff::Color;
+
+/// UI type constants
+const UI_TYPE_TEXT : u128 = 0;
+const UI_TYPE_PRINT : u128 = 1;
+
+trait ValueExtensions {
+    fn expect_utf8(self) -> Result<String, clarity_error>;
+}
+
+impl ValueExtensions for Value {
+    fn expect_utf8(self) -> Result<String, clarity_error> {
+        if let Value::Sequence(SequenceData::String(CharType::UTF8(UTF8Data { data }))) = self {
+            let mut s = String::new();
+            // each item in data is a code point
+            for val_bytes in data.into_iter() {
+                let val_4_bytes : [u8; 4] = match val_bytes.len() {
+                    0 => [0, 0, 0, 0],
+                    1 => [0, 0, 0, val_bytes[0]],
+                    2 => [0, 0, val_bytes[0], val_bytes[1]],
+                    3 => [0, val_bytes[0], val_bytes[1], val_bytes[2]],
+                    4 => [val_bytes[0], val_bytes[1], val_bytes[2], val_bytes[3]],
+                    _ => {
+                        // invalid
+                        s.push_str(&char::REPLACEMENT_CHARACTER.to_string());
+                        continue;
+                    }
+                };
+                let val_u32 = u32::from_be_bytes(val_4_bytes);
+                let c = char::from_u32(val_u32).unwrap_or(char::REPLACEMENT_CHARACTER);
+                s.push_str(&c.to_string());
+            }
+            Ok(s)
+        } else {
+            Err(clarity_error::Interpreter(InterpreterError::Expect("expected utf8 string".into())).into())
+        }
+    }
+}
+
+/// UI command to add text to a viewport
+struct RawText {
+    viewport_id: u128,
+    col: u64,
+    row: u64,
+    bg_color: Color,
+    fg_color: Color,
+    text: String
+}
+
+impl RawText {
+    pub fn from_clarity_value(viewport_id: u128, v: Value) -> Result<Self, Error> {
+        let text_tuple = v.expect_tuple()?;
+        let text = text_tuple
+            .get("text")
+            .cloned()
+            .expect("FATAL: no `text`")
+            .expect_utf8()?;
+
+        let col = text_tuple
+            .get("col")
+            .cloned()
+            .expect("FATAL: no `col`")
+            .expect_u128()?;
+
+        let row = text_tuple
+            .get("row")
+            .cloned()
+            .expect("FATAL: no `row`")
+            .expect_u128()?;
+
+        let bg_color_u128 = text_tuple
+            .get("bg-color")
+            .cloned()
+            .expect("FATAL: no `bg-color`")
+            .expect_u128()?
+            // truncate
+            & 0xffffffffu128;
+
+        
+        let fg_color_u128 = text_tuple
+            .get("fg-color")
+            .cloned()
+            .expect("FATAL: no `fg-color`")
+            .expect_u128()?
+            // trunate
+            &0xffffffffu128;
+
+        let bg_color : Color = u32::try_from(bg_color_u128).expect("infallible").into();
+        let fg_color : Color = u32::try_from(fg_color_u128).expect("infallible").into();
+
+        Ok(RawText {
+            viewport_id,
+            col: u64::try_from(col).map_err(|_| Error::Codec("Invalid 'col' value".into()))?,
+            row: u64::try_from(row).map_err(|_| Error::Codec("Invalid 'row' value".into()))?,
+            bg_color,
+            fg_color,
+            text
+        })
+    }
+
+    pub fn render(&self, root: &mut Root) -> Result<(), Error> {
+        let Some(viewport) = root.viewport_mut(self.viewport_id) else {
+            return Err(Error::NoViewport(self.viewport_id));
+        };
+        viewport.print_to(self.col, self.row, self.bg_color, self.fg_color, &self.text);
+        Ok(())
+    }
+}
+
+/// UI command to print text to a viewport
+struct PrintText {
+    viewport_id: u128,
+    // (column, row)
+    cursor: Option<(u64, u64)>,
+    bg_color: Color,
+    fg_color: Color,
+    text: String,
+    newline: bool
+}
+
+impl PrintText {
+    pub fn from_clarity_value(viewport_id: u128, v: Value) -> Result<Self, Error> {
+        let text_tuple = v.expect_tuple()?;
+        let text = text_tuple
+            .get("text")
+            .cloned()
+            .expect("FATAL: no `text`")
+            .expect_utf8()?;
+
+        let cursor = match text_tuple.get("cursor").cloned().expect("FATAL: no `cursor`").expect_optional()? {
+            Some(cursor_tuple_value) => {
+                let cursor_tuple = cursor_tuple_value.expect_tuple()?;
+                let col = cursor_tuple.get("col").cloned().expect("FATAL: no `col`").expect_u128()?;
+                let row = cursor_tuple.get("row").cloned().expect("FATAL: no `row`").expect_u128()?;
+                Some((u64::try_from(col).expect("col too big"), u64::try_from(row).expect("row too big")))
+            }
+            None => None
+        };
+
+        let bg_color_u128 = text_tuple
+            .get("bg-color")
+            .cloned()
+            .expect("FATAL: no `bg-color`")
+            .expect_u128()?
+            // truncate
+            & 0xffffffffu128;
+        
+        let fg_color_u128 = text_tuple
+            .get("fg-color")
+            .cloned()
+            .expect("FATAL: no `fg-color`")
+            .expect_u128()?
+            // trunate
+            &0xffffffffu128;
+
+        let newline = text_tuple
+            .get("newline")
+            .cloned()
+            .expect("FATAL: no `newline`")
+            .expect_bool()?;
+
+        let bg_color : Color = u32::try_from(bg_color_u128).expect("infallible").into();
+        let fg_color : Color = u32::try_from(fg_color_u128).expect("infallible").into();
+
+        Ok(PrintText {
+            viewport_id,
+            cursor,
+            bg_color,
+            fg_color,
+            text,
+            newline
+        })
+    }
+
+    pub fn render(&self, root: &mut Root, cursor: (u64, u64)) -> Result<(u64, u64), Error> {
+        let Some(viewport) = root.viewport_mut(self.viewport_id) else {
+            return Err(Error::NoViewport(self.viewport_id));
+        };
+        let cursor = self.cursor.clone().unwrap_or(cursor);
+        test_debug!("Print '{}' at {:?}", &self.text, &cursor);
+        if self.newline {
+            Ok(viewport.println(cursor.0, cursor.1, self.bg_color, self.fg_color, &self.text))
+        }
+        else {
+            Ok(viewport.print(cursor.0, cursor.1, self.bg_color, self.fg_color, &self.text))
+        }
+    }
+}
+
+/// UI element types
+enum UIContent {
+    RawText(RawText),
+    PrintText(PrintText),
+}
 
 impl Renderer {
-    pub fn new(max_attachment_size: usize) -> Renderer {
+    pub fn new(max_attachment_size: u64) -> Renderer {
         Renderer {
             max_attachment_size,
-            block_quote_level: 0,
-            list_stack: vec![],
-            table_state: None,
-            footnote_labels: HashSet::new(),
         }
     }
 
     /// Encode a stream of bytes into an LZMA-compressed byte stream
-    pub fn encode<R, W>(&self, input: &mut R, output: &mut W) -> Result<(), Error>
+    pub fn encode<R, W>(input: &mut R, output: &mut W) -> Result<(), Error>
     where
         R: BufRead,
-        W: Write
+        W: Write,
     {
-        lzma_rs::lzma_compress(input, output)
-            .map_err(|e| e.into())
+        lzma_rs::lzma_compress(input, output).map_err(|e| e.into())
     }
 
     /// Helper to encode a byte slice (LZMA-compressed)
-    pub fn encode_bytes(&self, mut input: &[u8]) -> Result<Vec<u8>, Error> {
+    pub fn encode_bytes(mut input: &[u8]) -> Result<Vec<u8>, Error> {
         let mut out = vec![];
-        lzma_rs::lzma_compress(&mut input, &mut out)
-            .map_err(Error::IOError)?;
+        lzma_rs::lzma_compress(&mut input, &mut out).map_err(Error::IOError)?;
         Ok(out)
     }
 
     /// Decode an attachment into bytes (written to `output`).
     /// Input must be an LZMA-compressed stream.
-    /// TODO: use a bounded reader on this!
+    /// TODO: need a bufread bound reader
     pub fn decode<R, W>(&self, input: &mut R, output: &mut W) -> Result<(), Error>
     where
         R: BufRead,
-        W: Write
+        W: Write,
     {
-        lzma_rs::lzma_decompress(input, output)
-            .map_err(|e| e.into())
+        lzma_rs::lzma_decompress(input, output).map_err(|e| e.into())
     }
 
-    /// Instantiate the main code 
-    fn initialize_main(&self, wrb_tx: &mut WritableWrbStore, headers_db: &dyn HeadersDB, code_id: &QualifiedContractIdentifier, code: &str) -> Result<(), Error> {
-        debug!("main code = '{}'", code);
-        let mut main_exprs = clarity_parse(code_id, code)?;
+    /// Instantiate the main code
+    fn initialize_main(
+        &self,
+        wrb_tx: &mut WritableWrbStore,
+        headers_db: &dyn HeadersDB,
+        code_id: &QualifiedContractIdentifier,
+        code: &str,
+    ) -> Result<(), Error> {
+        debug!("main (linked) code = '{}'", code);
+        let mut main_exprs = clarity_parse(code_id, &code)?;
         let analysis_result = clarity_analyze(code_id, &mut main_exprs, wrb_tx, true);
         match analysis_result {
             Ok(_) => {
                 let db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
-                let mut vm_env = OwnedEnvironment::new_free(
-                    true,
-                    DEFAULT_CHAIN_ID,
-                    db,
-                    DEFAULT_WRB_EPOCH,
-                );
-                vm_env
-                    .initialize_versioned_contract(
-                        code_id.clone(),
-                        DEFAULT_WRB_CLARITY_VERSION,
-                        code,
-                        None,
-                        ASTRules::PrecheckSize
-                    )?;
+                let mut vm_env =
+                    OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+                vm_env.initialize_versioned_contract(
+                    code_id.clone(),
+                    DEFAULT_WRB_CLARITY_VERSION,
+                    &code,
+                    None,
+                    ASTRules::PrecheckSize,
+                )?;
             }
             Err((e, _)) => {
                 return Err(Error::Clarity(clarity_error::Unchecked(e.err)));
@@ -138,508 +316,253 @@ impl Renderer {
         Ok(())
     }
 
-    /// Is this a wrb code tag?
-    fn is_wrb_code(tag: &CMTag, check: &str) -> bool {
-        match tag {
-            CMTag::CodeBlock(CMCodeBlockKind::Fenced(fence)) => fence.deref() == check,
-            _ => false
-        }
+    /// Run code to query the system state.
+    /// `code` should print out Values.  These Values will be extracted and returned.
+    fn run_query_code(
+        &self,
+        vm_env: &mut OwnedEnvironment,
+        main_code_id: &QualifiedContractIdentifier,
+        code: &str,
+    ) -> Result<Vec<Value>, Error> {
+        let (contract, _, _) = vm_env.execute_in_env(
+            StandardPrincipalData::transient().into(),
+            None,
+            None,
+            |env| env.global_context.database.get_contract(main_code_id),
+        )?;
+
+        let (_, _, events) = vm_env.execute_in_env(
+            StandardPrincipalData::transient().into(),
+            None,
+            Some(contract.contract_context),
+            |env| env.eval_raw_with_rules(code, ASTRules::PrecheckSize),
+        )?;
+
+        let values = events
+            .into_iter()
+            .filter_map(|event| {
+                if let StacksTransactionEvent::SmartContractEvent(event) = event {
+                    if event.key.1 == "print" {
+                        Some(event.value)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(values)
     }
 
-    /// Decode the decompressed attachment and find its main code and document code snippets
-    fn find_code(&self, input: &str) -> Result<(String, Vec<String>), Error> {
-        // set up the common-mark parser
-        let mut opts = CMOpts::empty();
-        opts.insert(CMOpts::ENABLE_TABLES);
-        opts.insert(CMOpts::ENABLE_STRIKETHROUGH);
+    /// Get all the viewports
+    fn get_viewports(
+        &self,
+        vm_env: &mut OwnedEnvironment,
+        main_code_id: &QualifiedContractIdentifier,
+    ) -> Result<Vec<Viewport>, Error> {
+        let qry = "(print (wrb-get-viewports))";
+        let viewports_list = self.run_query_code(vm_env, main_code_id, qry)?
+            .pop()
+            .expect("FATAL: expected one value")
+            .expect_list()?;
 
-        let mut main_code = None;
-        let mut doc_code : Vec<String> = vec![];
+        let mut viewports = vec![];
+        for vp_value in viewports_list.into_iter() {
+            let viewport = Viewport::from_clarity_value(vp_value)?;
+            viewports.push(viewport);
+        }
+        Ok(viewports)
+    }
 
-        let mut in_main_code = false;
-        let mut in_doc_code = false;
+    /// Get a viewport's contents 
+    fn get_ui_contents(&self, vm_env: &mut OwnedEnvironment, main_code_id: &QualifiedContractIdentifier) -> Result<Vec<UIContent>, Error> {
+        // how many UI elements
+        let qry = "(print (wrb-ui-len))";
+        let num_elements = self.run_query_code(vm_env, main_code_id, qry)?
+            .pop()
+            .expect("FATAL: expected one result")
+            .expect_u128()?;
+        
+        let mut ui_contents = Vec::with_capacity(num_elements as usize);
 
-        let mut parser = CMParser::new_ext(input, opts);
-        while let Some(event) = parser.next() {
-            match event {
-                CMEvent::Start(tag) => {
-                    if Self::is_wrb_code(&tag, "wrb:main") {
-                        in_main_code = true;
-                        in_doc_code = false;
-                        if main_code.is_none() {
-                            main_code = Some("".to_string());
-                        }
-                    }
-                    else if Self::is_wrb_code(&tag, "wrb") {
-                        in_main_code = false;
-                        in_doc_code = true;
-                        doc_code.push("".to_string());
-                    }
-                }
-                CMEvent::End(tag) => {
-                    if Self::is_wrb_code(&tag, "wrb:main") {
-                        in_main_code = false;
-                    }
-                    else if Self::is_wrb_code(&tag, "wrb") {
-                        in_doc_code = false;
-                    }
-                },
-                CMEvent::Text(txt) => {
-                    if in_main_code {
-                        if let Some(code) = main_code.as_mut() {
-                            code.push_str(txt.deref());
-                        }
-                    }
-                    else if in_doc_code {
-                        if let Some(code) = doc_code.last_mut() {
-                            code.push_str(txt.deref());
-                        }
-                    }
-                }
-                _ => {}
+        for index in 0..num_elements {
+            let qry = format!("(print (wrb-ui-element-descriptor u{}))", index);
+            let ui_desc_tuple = self.run_query_code(vm_env, main_code_id, &qry)?
+                .pop()
+                .expect("FATAL: expected one result")
+                .expect_optional()?
+                .expect("FATAL: expected UI descriptor at defined index")
+                .expect_tuple()?;
+
+            let ui_type = ui_desc_tuple
+                .get("type")
+                .cloned()
+                .expect("FATAL: expected 'type'")
+                .expect_u128()?;
+
+            let viewport_id = ui_desc_tuple
+                .get("viewport")
+                .cloned()
+                .expect("FATAL: expected 'viewport'")
+                .expect_u128()?;
+
+            if ui_type == UI_TYPE_TEXT {
+                // go get the text 
+                let qry = format!("(print (wrb-ui-get-text-element u{}))", index);
+                let viewport_text_value = self.run_query_code(vm_env, main_code_id, &qry)?
+                    .pop()
+                    .expect("FATAL: expected one result")
+                    .expect_optional()?
+                    .expect("FATAL: raw text UI element not defined at defined index");
+
+                let raw_text = RawText::from_clarity_value(viewport_id, viewport_text_value)?;
+                ui_contents.push(UIContent::RawText(raw_text));
+            }
+            else if ui_type == UI_TYPE_PRINT {
+                // go get the print/println
+                let qry = format!("(print (wrb-ui-get-print-element u{}))", index);
+                let viewport_print_value = self.run_query_code(vm_env, main_code_id, &qry)?
+                    .pop()
+                    .expect("FATAL: expected one result")
+                    .expect_optional()?
+                    .expect("FATAL: raw text UI element not defined at defined index");
+
+                let print_text = PrintText::from_clarity_value(viewport_id, viewport_print_value)?;
+                ui_contents.push(UIContent::PrintText(print_text));
+            }
+            else {
+                warn!("Unsupported UI type {} (index {})", ui_type, index);
             }
         }
-        Ok((main_code.unwrap_or("".to_string()), doc_code))
+        Ok(ui_contents)
     }
 
-    /// Check the doc code.  It runs in the same contract context as the main code, but distinct
-    /// from all other doc codes.
-    fn analyze_doc_code<C: ClarityStorage>(&self, wrb_conn: &mut C, code_id: &QualifiedContractIdentifier, main_code: &str, doc_code: &str) -> Result<(), Error> {
-        let combined_code = format!("{}\n{}", main_code, doc_code);
-        let mut doc_exprs = clarity_parse(&code_id, &combined_code)?;
-        analysis::run_analysis(
-            code_id,
-            &mut doc_exprs,
-            &mut wrb_conn.get_analysis_db(),
-            false,
-            LimitedCostTracker::new_free(),
-            DEFAULT_WRB_CLARITY_VERSION,
-        ).map_err(|(e, _)| Error::Clarity(clarity_error::Unchecked(e.err)))?;
-        Ok(())
-    }
+    /// Get the root pane
+    fn get_root(
+        &self,
+        vm_env: &mut OwnedEnvironment,
+        main_code_id: &QualifiedContractIdentifier,
+    ) -> Result<Root, Error> {
+        let viewports = self.get_viewports(vm_env, main_code_id)?;
 
-    /// Render a Clarity CharData
-    fn render_chartype(char_data: CharType) -> String {
-        match char_data {
-            CharType::ASCII(ascii_data) => {
-                std::str::from_utf8(&ascii_data.data)
-                    .unwrap_or(&format!("{}", &ascii_data))
-                    .to_string()
-            }
-            CharType::UTF8(utf8_data) => {
-                let mut result = String::new();
-                for c in utf8_data.data.iter() {
-                    let next_chr_str = match std::str::from_utf8(c) {
-                        Ok(s) => s.to_string(),
-                        Err(_) => {
-                            if c.len() > 1 {
-                                format!("\\u{{{}}}", hash::to_hex(&c[..]))
-                            } else {
-                                format!("{}", std::ascii::escape_default(c[0]))
-                            }
-                        }
-                    };
-                    result.push_str(&next_chr_str);
+        let qry = "(print (wrb-get-root))";
+        let mut root = self
+            .run_query_code(vm_env, main_code_id, qry)?
+            .pop()
+            .map(|root_value| {
+                let root_tuple = root_value.expect_tuple()?;
+                let cols: u64 = root_tuple
+                    // get `cols` value, which is a uint
+                    .get("cols")
+                    .cloned()
+                    .expect("missing cols")
+                    // unwrap to a u128
+                    .expect_u128()?
+                    // convert to u64
+                    .try_into()
+                    .expect("too many cols");
+
+                let rows: u64 = root_tuple
+                    // get `rows` value, which is a uint
+                    .get("rows")
+                    .cloned()
+                    .expect("missing rows")
+                    // unwrap to a u128
+                    .expect_u128()?
+                    // convert to u64
+                    .try_into()
+                    .expect("too many rows");
+
+                let root_res : Result<_, Error> = Ok(Root::new(cols, rows, viewports));
+                root_res
+            })
+            .expect("FATAL: `wrb-get-root` failed to produce output")
+            .unwrap_or(Root::new(80, 24, vec![]));
+
+        let ui_contents = self.get_ui_contents(vm_env, main_code_id)?;
+        let mut viewport_cursors = HashMap::new();
+        for ui_content in ui_contents {
+            match ui_content {
+                UIContent::RawText(raw_text) => {
+                    raw_text.render(&mut root)?;
                 }
-                result
+                UIContent::PrintText(print_text) => {
+                    let cursor = viewport_cursors.get(&print_text.viewport_id).cloned().unwrap_or((0, 0));
+                    let new_cursor = print_text.render(&mut root, cursor)?;
+                    viewport_cursors.insert(print_text.viewport_id, new_cursor);
+                }
             }
         }
+        Ok(root)
     }
 
-    /// Evaluate a piece of doc code in the context of the main contract
-    fn eval_doc_code(&self, vm: &mut ClarityVM, code_id: &QualifiedContractIdentifier, doc_code: &str) -> Result<String, Error> {
-        let headers_db = vm.headers_db();
-        let mut wrb_tx = vm.begin_page_load();
-        let db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
-        let mut vm_env = OwnedEnvironment::new_free(
-            true,
-            DEFAULT_CHAIN_ID,
-            db,
-            DEFAULT_WRB_EPOCH,
+    /// Decode an LZMA input stream into an ASCII string, throwing an error if it's not actually an
+    /// ASCII string
+    fn read_as_ascii<R: Read + BufRead>(&self, compressed_input: &mut R) -> Result<String, Error> {
+        let mut decompressed_code = vec![];
+        self.decode(compressed_input, &mut decompressed_code)?;
+        let input = std::str::from_utf8(&decompressed_code)
+            .map_err(|_| Error::Codec("Compressed bytes did not decode to a utf8 string".into()))?;
+        if !input.is_ascii() {
+            return Err(Error::Codec("Expected ASCII string".into()));
+        }
+        Ok(input.to_string())
+    }
+
+    /// Decode the decompressed attachment into Clarity code, run it, and evaluate it into a root
+    /// pane
+    fn eval_root(&self, vm: &mut ClarityVM, compressed_input: &[u8]) -> Result<Root, Error> {
+        let input = self.read_as_ascii(&mut &compressed_input[..])?;
+        let linked_code = format!(
+            "{}\n;; ============= END OF WRBLIB ===================\n{}",
+            WRBLIB_CODE, input
         );
+        let main_code_id = vm.get_code_id();
+        let headers_db = vm.headers_db();
+        let code_hash = Hash160::from_data(compressed_input);
+        let mut wrb_tx = vm.begin_page_load(&code_hash)?;
 
-        let (contract, _, _) = vm_env
-            .execute_in_env(
-                StandardPrincipalData::transient().into(),
-                None,
-                None,
-                |env| {
-                    env.global_context.database.get_contract(code_id)
-                }
-            )?;
+        // instantiate and run main code
+        self.initialize_main(&mut wrb_tx, &headers_db, &main_code_id, &linked_code)?;
 
-        let (_, _, events) = vm_env
-            .execute_in_env(
-                StandardPrincipalData::transient().into(),
-                None,
-                Some(contract.contract_context),
-                |env| {
-                    env.eval_raw_with_rules(doc_code, ASTRules::PrecheckSize)
-                }
-            )?;
+        // read out UI components
+        let db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
+        let mut vm_env = OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
 
-        let mut value_str = "".to_string();
-        for event in events {
-            if let StacksTransactionEvent::SmartContractEvent(event) = event {
-                if event.key.1 == "print" {
-                    if let Value::Sequence(SequenceData::String(char_data)) = event.value {
-                        value_str.push_str(&format!("{}\n", &Self::render_chartype(char_data)));
-                    }
-                    else {
-                        value_str.push_str(&format!("{}\n", &event.value));
-                    }
-                }
-            }
-        }
-        Ok(value_str)
+        let root = self.get_root(&mut vm_env, &main_code_id)?;
+        wrb_tx.commit()?;
+        Ok(root)
     }
 
-    /// Write a link type, given the type, destination URL, and title
-    fn write_linktype<W: Write>(&self, output: &mut W, linktype: &CMLinkType, dest_url: &str, title: &str) -> Result<(), Error> {
-        match linktype {
-            CMLinkType::Inline => {
-                write!(output, "[{}]({})", title, dest_url)?;
-            }
-            CMLinkType::Reference => {
-                write!(output, "[{}][{}]", title, dest_url)?;
-            }
-            CMLinkType::ReferenceUnknown => {
-                write!(output, "[{}][{}]", title, dest_url)?;
-            }
-            CMLinkType::Collapsed => {
-                write!(output, "[{}][]", title)?;
-            }
-            CMLinkType::CollapsedUnknown => {
-                write!(output, "[{}][]", title)?;
-            }
-            CMLinkType::Shortcut => {
-                write!(output, "[{}]", title)?;
-            }
-            CMLinkType::ShortcutUnknown => {
-                write!(output, "[{}]", title)?;
-            }
-            CMLinkType::Autolink => {
-                write!(output, "<{}>", dest_url)?;
-            }
-            CMLinkType::Email => {
-                write!(output, "<{}>", dest_url)?;
-            }
+    pub fn eval_to_string(
+        &mut self,
+        vm: &mut ClarityVM,
+        compressed_input: &[u8],
+    ) -> Result<String, Error> {
+        let mut root = self.eval_root(vm, compressed_input)?;
+        let buff = root.refresh();
+        let scanlines = Scanline::compile(&buff);
+        let mut output = "".to_string();
+        for sl in scanlines {
+            output.push_str(&sl.into_term_code());
         }
-        Ok(())
-    }
-
-    /// Write a tag
-    fn write_tag<W: Write>(&mut self, start: bool, tag: &CMTag, output: &mut W) -> Result<(), Error> {
-        match tag {
-            CMTag::Paragraph => {
-                write!(output, "\n")?;
-                if !start {
-                    write!(output, "\n")?;
-                }
-            }
-            CMTag::Heading(ref heading_level, ref _frag_id, ref _classes) => {
-                if start {
-                    match heading_level {
-                        CMHeadingLevel::H1 => {
-                            write!(output, "# ")?;
-                        }
-                        CMHeadingLevel::H2 => {
-                            write!(output, "## ")?;
-                        }
-                        CMHeadingLevel::H3 => {
-                            write!(output, "### ")?;
-                        }
-                        CMHeadingLevel::H4 => {
-                            write!(output, "#### ")?;
-                        }
-                        CMHeadingLevel::H5 => {
-                            write!(output, "##### ")?;
-                        }
-                        CMHeadingLevel::H6 => {
-                            write!(output, "###### ")?;
-                        }
-                    }
-                }
-                else {
-                    write!(output, "\n")?;
-                }
-            }
-            CMTag::BlockQuote => {
-                if start {
-                    self.block_quote_level += 1;
-                    for _ in 0..self.block_quote_level {
-                        write!(output, "> ")?;
-                    }
-                }
-                else {
-                    if self.block_quote_level > 0 {
-                        self.block_quote_level -= 1;
-                        if self.block_quote_level == 0 {
-                            write!(output, "\n")?;
-                        }
-                    }
-                }
-            },
-            CMTag::CodeBlock(ref code_block_kind) => {
-                match code_block_kind {
-                    CMCodeBlockKind::Indented => {
-                        write!(output, "```\n")?;
-                    }
-                    CMCodeBlockKind::Fenced(ref code_type) => {
-                        if start {
-                            write!(output, "```{}\n", code_type)?;
-                        }
-                        else {
-                            write!(output, "```\n")?;
-                        }
-                    }
-                }
-            }
-            CMTag::List(ref first_num_opt) => {
-                if start {
-                    if self.list_stack.len() == 0 {
-                        write!(output, "\n")?;
-                    }
-                    self.list_stack.push(first_num_opt.clone());
-                }
-                else {
-                    self.list_stack.pop();
-                    if self.list_stack.len() == 0 {
-                        write!(output, "\n")?;
-                    }
-                }
-            }
-            CMTag::Item => {
-                if start {
-                    let depth = self.list_stack.len();
-                    match self.list_stack.last_mut() {
-                        Some(ref mut list_num_opt) => {
-                            for _ in 0..depth {
-                                write!(output, "   ")?;
-                            }
-
-                            match list_num_opt {
-                                Some(ref mut ctr) => {
-                                    write!(output, "{}. ", ctr)?;
-                                    *ctr += 1;
-                                },
-                                None => {
-                                    write!(output, "* ")?;
-                                }
-                            }
-                        }
-                        None => {}
-                    }
-                }
-                else {
-                    write!(output, "\n")?;
-                }
-            }
-            CMTag::FootnoteDefinition(ref label) => {
-                if start {
-                    self.footnote_labels.insert(label.deref().to_string());
-                }
-            }
-            CMTag::Table(ref alignments) => {
-                if start {
-                    self.table_state = Some(TableState::Header(alignments.clone()));
-                }
-                else {
-                    self.table_state = None;
-                }
-            }
-            CMTag::TableHead => {
-                if !start {
-                    write!(output, "|\n")?;
-                }
-            },
-            CMTag::TableRow => {
-                if start {
-                    let new_state = match self.table_state.take() {
-                        Some(TableState::Header(alignments)) => {
-                            // write the separators
-                            for alignment in alignments.iter() {
-                                match alignment {
-                                    CMAlignment::Left => write!(output, "| :--- ")?,
-                                    CMAlignment::Center => write!(output, "| :---: ")?,
-                                    CMAlignment::Right => write!(output, "| ---: ")?,
-                                    CMAlignment::None => write!(output, "| --- ")?,
-                                }
-                            }
-                            write!(output, "|\n")?;
-                            Some(TableState::Body)
-                        },
-                        Some(TableState::Body) => Some(TableState::Body),
-                        None => None
-                    };
-                    self.table_state = new_state;
-                }
-                else {
-                    if self.table_state.is_some() {
-                        write!(output, "|\n")?;
-                    }
-                }
-            },
-            CMTag::TableCell => {
-                if start {
-                    write!(output, "| ")?;
-                }
-                else {
-                    write!(output, " ")?;
-                }
-            }
-            CMTag::Emphasis => {
-                write!(output, "_")?;
-            }
-            CMTag::Strong => {
-                write!(output, "**")?;
-            }
-            CMTag::Strikethrough => {
-                write!(output, "~~")?;
-            }
-            CMTag::Link(ref linktype, ref dest_url, ref title) => {
-                self.write_linktype(output, linktype, dest_url.deref(), title.deref())?;
-            }
-            CMTag::Image(ref linktype, ref dest_url, ref title) => {
-                self.write_linktype(output, linktype, dest_url.deref(), title.deref())?;
-            }
-        }
-        Ok(())
+        Ok(output)
     }
     
-    /// Decode the decompressed attachment 
-    pub fn eval<W: Write>(&mut self, vm: &mut ClarityVM, input: &str, output: &mut W) -> Result<(), Error> {
-        self.inner_eval(vm, input, output, true)
-    }
-
-    /// Decode the decompressed attachment 
-    fn inner_eval<W: Write>(&mut self, vm: &mut ClarityVM, input: &str, output: &mut W, toplevel: bool) -> Result<(), Error> {
-        let main_code_id = vm.get_code_id();
-        
-        if toplevel {
-            // top-level call.
-            // set up the main code for this document if we haven't already.
-            let has_main = vm.has_code(&main_code_id);
-            if !has_main {
-                let (main_code, doc_codes) = self.find_code(input)?;
-                let headers_db = vm.headers_db();
-                let mut wrb_tx = vm.begin_page_load();
-
-                // type-check the doc codes against the main code
-                for doc_code in doc_codes.iter() {
-                    self.analyze_doc_code(&mut wrb_tx, &main_code_id, &main_code, doc_code)?;
-                }
-
-                // instantiate the main code
-                self.initialize_main(&mut wrb_tx, &headers_db, &main_code_id, &main_code)?;
-                wrb_tx.commit();
-            }
+    pub fn eval_to_text(
+        &mut self,
+        vm: &mut ClarityVM,
+        compressed_input: &[u8],
+    ) -> Result<String, Error> {
+        let mut root = self.eval_root(vm, compressed_input)?;
+        let buff = root.refresh();
+        let scanlines = Scanline::compile(&buff);
+        let mut output = "".to_string();
+        for sl in scanlines {
+            output.push_str(&sl.into_text())
         }
-
-        // current doc code
-        let mut doc_code = None;
-        let mut skip_code = false;
-
-        // set up the common-mark parser
-        let mut opts = CMOpts::empty();
-        opts.insert(CMOpts::ENABLE_TABLES);
-        opts.insert(CMOpts::ENABLE_STRIKETHROUGH);
-
-        let mut parser = CMParser::new_ext(input, opts);
-        while let Some(event) = parser.next() {
-            debug!("event: {:?}", &event);
-            match event {
-                CMEvent::Start(tag) => {
-                    if Self::is_wrb_code(&tag, "wrb:main") {
-                        // skip -- already instantiated
-                        skip_code = true;
-                        continue;
-                    }
-                    else if Self::is_wrb_code(&tag, "wrb") && toplevel {
-                        // doc code -- evaluate it and parse the output as markdown
-                        doc_code = Some("".to_string());
-                        skip_code = true;
-                    }
-                    else {
-                        self.write_tag(true, &tag, output)?;
-                    }
-                }
-                CMEvent::End(tag) => {
-                    if Self::is_wrb_code(&tag, "wrb:main") {
-                        // skip -- already instantiated
-                        skip_code = false;
-                        continue;
-                    }
-                    else if Self::is_wrb_code(&tag, "wrb") && toplevel {
-                        if let Some(doc_code) = doc_code.take() {
-                            if doc_code.len() > 0 {
-                                // evaluate the doc code and splice it in
-                                debug!("Eval doc code '{}'", &doc_code);
-                                let doc_input = self.eval_doc_code(vm, &main_code_id, &doc_code)?;
-                                debug!("doc code:\n>>>>>>>\n{}\n<<<<<<", &doc_input);
-                                self.inner_eval(vm, &doc_input, output, false)?;
-                            }
-                        }
-                        skip_code = false;
-                    }
-                    else {
-                        self.write_tag(false, &tag, output)?;
-                    }
-                }
-                CMEvent::Text(txt) => {
-                    if let Some(doc_code) = doc_code.as_mut() {
-                        doc_code.push_str(txt.deref());
-                    }
-                    else if !skip_code {
-                        write!(output, "{}", txt)?;
-                    }
-                }
-                CMEvent::Code(code) => {
-                    if !skip_code {
-                        write!(output, "`{}`", code)?;
-                    }
-                }
-                CMEvent::Html(_html) => {
-
-                }
-                CMEvent::FootnoteReference(_txt) => {
-
-                }
-                CMEvent::SoftBreak => {
-                    if !skip_code {
-                        write!(output, "\n")?;
-                    }
-                }
-                CMEvent::HardBreak => {
-                    if !skip_code {
-                        write!(output, "\n\n")?;
-                    }
-                }
-                CMEvent::Rule => {
-                    if !skip_code {
-                        write!(output, "---\n")?;
-                    }
-                }
-                CMEvent::TaskListMarker(done) => {
-                    if !skip_code {
-                        if done {
-                            write!(output, "[x]")?;
-                        }
-                        else {
-                            write!(output, "[ ]")?;
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn eval_to_string(&mut self, vm: &mut ClarityVM, input: &str) -> Result<String, Error> {
-        let mut bytes = vec![];
-        self.eval(vm, input, &mut bytes)?;
-        let s = std::str::from_utf8(&bytes).map_err(|_| Error::Codec("Unable to encode eval'ed markdown to String".to_string()))?;
-        Ok(s.to_string())
+        Ok(output)
     }
 }
-

@@ -15,18 +15,18 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use crate::runner::Config;
+use crate::core::Config;
 use std::path::{Path, PathBuf};
+use stacks_common::util::secp256k1::Secp256k1PrivateKey;
+use clarity::vm::types::QualifiedContractIdentifier;
 
 use dirs;
 
 pub const WRB_SIGNIN_HELPER: &'static str = "wrb-signin-helper";
-pub const WRB_GAIA_HELPER: &'static str = "wrb-gaia-helper";
-pub const WRB_NODE_HELPER: &'static str = "wrb-node-helper";
 pub const WRB_WALLET_HELPER: &'static str = "wrb-wallet-helper";
 
 // maximum size of a compressed attachment is 1MB
-pub const MAX_ATTACHMENT_SIZE : usize = 1024 * 1024;
+pub const MAX_ATTACHMENT_SIZE: usize = 1024 * 1024;
 
 impl Config {
     fn default_helper_programs_dir() -> String {
@@ -34,7 +34,10 @@ impl Config {
         wrb_dir.push(".wrb");
         wrb_dir.push("helpers");
 
-        wrb_dir.to_str().expect("FATAL: could not encode home directory path as string").to_string()
+        wrb_dir
+            .to_str()
+            .expect("FATAL: could not encode home directory path as string")
+            .to_string()
     }
 
     fn default_signin_helper<P: AsRef<Path>>(helper_programs_dir: P) -> String {
@@ -42,23 +45,9 @@ impl Config {
         pb.push(helper_programs_dir);
         pb.push(WRB_SIGNIN_HELPER);
 
-        pb.to_str().expect("FATAL: could not encode path to signin helper").to_string()
-    }
-    
-    fn default_gaia_helper<P: AsRef<Path>>(helper_programs_dir: P) -> String {
-        let mut pb = PathBuf::new();
-        pb.push(helper_programs_dir);
-        pb.push(WRB_GAIA_HELPER);
-
-        pb.to_str().expect("FATAL: could not encode path to gaia helper").to_string()
-    }
-    
-    fn default_node_helper<P: AsRef<Path>>(helper_programs_dir: P) -> String {
-        let mut pb = PathBuf::new();
-        pb.push(helper_programs_dir);
-        pb.push(WRB_NODE_HELPER);
-
-        pb.to_str().expect("FATAL: could not encode path to node helper").to_string()
+        pb.to_str()
+            .expect("FATAL: could not encode path to signin helper")
+            .to_string()
     }
 
     fn default_wallet_helper<P: AsRef<Path>>(helper_programs_dir: P) -> String {
@@ -66,22 +55,23 @@ impl Config {
         pb.push(helper_programs_dir);
         pb.push(WRB_WALLET_HELPER);
 
-        pb.to_str().expect("FATAL: could not encode path to wallet helper").to_string()
+        pb.to_str()
+            .expect("FATAL: could not encode path to wallet helper")
+            .to_string()
     }
 
-    pub fn default(mainnet: bool, node: &str, gaia_hub: &str) -> Config {
+    pub fn default(mainnet: bool, node_host: &str, node_port: u16) -> Config {
         let helper_programs_dir = Config::default_helper_programs_dir();
         Config {
             helper_programs_dir: helper_programs_dir.clone(),
-            wrb_node_helper: Config::default_node_helper(&helper_programs_dir),
-            wrb_gaia_helper: Config::default_gaia_helper(&helper_programs_dir),
             wrb_wallet_helper: Config::default_wallet_helper(&helper_programs_dir),
             wrb_signin_helper: Config::default_signin_helper(&helper_programs_dir),
-            node_url: node.to_string(),
-            gaia_url: gaia_hub.to_string(),
             mainnet,
             max_attachment_size: MAX_ATTACHMENT_SIZE,
-            num_columns: 120
+            num_columns: 120,
+            node_host: node_host.into(),
+            node_port,
+            private_key: Secp256k1PrivateKey::new()
         }
     }
 
@@ -89,27 +79,28 @@ impl Config {
         &self.wrb_signin_helper
     }
 
-    pub fn get_node_helper(&self) -> &str {
-        &self.wrb_node_helper
-    }
-
     pub fn get_wallet_helper(&self) -> &str {
         &self.wrb_wallet_helper
     }
 
-    pub fn get_gaia_helper(&self) -> &str {
-        &self.wrb_gaia_helper
-    }
-
-    pub fn get_node_url(&self) -> &str {
-        &self.node_url
-    }
-
-    pub fn get_gaia_url(&self) -> &str {
-        &self.gaia_url
-    }
-
     pub fn mainnet(&self) -> bool {
         self.mainnet
+    }
+
+    pub fn get_node_addr(&self) -> (String, u16) {
+        (self.node_host.clone(), self.node_port)
+    }
+
+    pub fn private_key(&self) -> &Secp256k1PrivateKey {
+        &self.private_key
+    }
+
+    pub fn get_bns_contract_id(&self) -> QualifiedContractIdentifier {
+        if self.mainnet {
+            QualifiedContractIdentifier::parse("SP000000000000000000002Q6VF78.bns").unwrap()
+        }
+        else {
+            QualifiedContractIdentifier::parse("ST000000000000000000002AMW42H.bns").unwrap()
+        }
     }
 }

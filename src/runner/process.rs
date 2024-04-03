@@ -15,17 +15,31 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::process::{Command, Stdio};
-use std::env;
 use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::env;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use std::io::Write;
 
-use crate::runner::Config;
-use crate::runner::Runner;
+use crate::core::Config;
 use crate::runner::Error;
+use crate::runner::Runner;
 
+use crate::core::with_globals;
+use crate::core::with_global_config;
+
+use clarity::vm::types::BufferLength;
+use clarity::vm::types::PrincipalData;
+use clarity::vm::types::QualifiedContractIdentifier;
+use clarity::vm::types::SequenceData;
+use clarity::vm::types::Value;
+
+use stacks_common::util::hash::Hash160;
+
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json;
 
 fn fmt_bin_args(bin: &str, args: &[&str]) -> String {
@@ -38,15 +52,21 @@ fn fmt_bin_args(bin: &str, args: &[&str]) -> String {
 }
 
 impl Runner {
-    pub fn new(config: Config) -> Runner {
+    pub fn new() -> Runner {
         Runner {
-            config
+            node: None,
         }
     }
 
     /// Returns (exit code, stdout, stderr)
-    fn inner_run_process(&self, bin_fullpath: &str, args: &[&str], stdin: Option<String>) -> Result<(i32, Vec<u8>, Vec<u8>), Error> {
+    fn inner_run_process(
+        &self,
+        bin_fullpath: &str,
+        args: &[&str],
+        stdin: Option<String>,
+    ) -> Result<(i32, Vec<u8>, Vec<u8>), Error> {
         let full_args = fmt_bin_args(bin_fullpath, args);
+        debug!("Run: `{}`", &full_args);
         let cmd = Command::new(bin_fullpath)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -58,8 +78,9 @@ impl Runner {
                 Error::FailedToRun(full_args.clone())
             })?;
 
-        let output = cmd.wait_with_output()
-            .map_err(|ioe| Error::FailedToExecute(full_args, ioe))?;
+        let output = cmd
+            .wait_with_output()
+            .map_err(|ioe| Error::FailedToExecute(full_args, format!("{}", &ioe)))?;
 
         let exit_code = match output.status.code() {
             Some(code) => code,
@@ -70,14 +91,15 @@ impl Runner {
                 return Err(Error::KilledBySignal(full_args));
             }
         };
-        
+
         Ok((exit_code, output.stdout, output.stderr))
     }
 
     /// Generate a BIP39 seed phrase via `wrb-wallet-helper seed-phrase`
     pub fn wallet_seed_phrase(&self) -> Result<String, Error> {
-        let fp = self.config.get_wallet_helper();
-        let (exit_status, stdout, _stderr) = self.inner_run_process(fp, &["seed-phrase"], None)?;
+        let fp = with_global_config(|cfg| cfg.get_wallet_helper().to_string())
+            .ok_or(Error::NotInitialized)?;
+        let (exit_status, stdout, _stderr) = self.inner_run_process(&fp, &["seed-phrase"], None)?;
         if exit_status != 0 {
             return Err(Error::BadExit(exit_status));
         }
@@ -86,32 +108,14 @@ impl Runner {
         let stdout_str = std::str::from_utf8(&stdout)
             .map_err(|_| Error::InvalidOutput("<corrupt-seed-phrase>".to_string()))?;
 
-        let phrase : serde_json::Value = serde_json::from_str(stdout_str)
+        let phrase: serde_json::Value = serde_json::from_str(stdout_str)
             .map_err(|_| Error::InvalidOutput(stdout_str.to_string()))?;
 
-        let phrase = phrase.as_str()
+        let phrase = phrase
+            .as_str()
             .ok_or(Error::InvalidOutput(stdout_str.to_string()))?
             .to_string();
 
         Ok(phrase)
-    }
-
-    /// Go and get a BNS name's zonefile
-    pub fn gaia_get_zonefile(&self, bns_name: &str) -> Result<Vec<u8>, Error> {
-        let fp = self.config.get_gaia_helper();
-        let node_url = self.config.get_node_url();
-        let args = if self.config.mainnet() {
-            vec!["-n", node_url, "-r", bns_name]
-        }
-        else {
-            vec!["-t", "-n", node_url, "-r", bns_name]
-        };
-
-        let (exit_status, stdout, _stderr) = self.inner_run_process(fp, &args, None)?;
-        if exit_status != 0 {
-            return Err(Error::BadExit(exit_status));
-        }
-
-        Ok(stdout)
     }
 }

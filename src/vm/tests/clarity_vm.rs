@@ -15,8 +15,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::fs;
 use crate::vm::ClarityVM;
+use std::fs;
 
 #[test]
 fn test_vm_bootup() {
@@ -26,4 +26,4 @@ fn test_vm_bootup() {
     }
 
     let _ = ClarityVM::new(db_path, "foo.btc");
-} 
+}

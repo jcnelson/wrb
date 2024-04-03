@@ -19,14 +19,17 @@ pub mod sqlite;
 
 use clarity::vm::costs::ExecutionCost;
 use clarity::vm::ClarityVersion;
+use clarity::vm::types::StandardPrincipalData;
 
-use stacks_common::types::StacksEpochId;
-use stacks_common::types::chainstate::ConsensusHash;
 use stacks_common::types::chainstate::BlockHeaderHash;
+use stacks_common::types::chainstate::ConsensusHash;
+use stacks_common::types::StacksEpochId;
+use stacks_common::util::secp256k1::{Secp256k1PublicKey, Secp256k1PrivateKey};
+use stacks_common::util::hash::Hash160;
 
 // copied from core
-pub const FIRST_BURNCHAIN_CONSENSUS_HASH : ConsensusHash = ConsensusHash([0u8; 20]);
-pub const FIRST_STACKS_BLOCK_HASH : BlockHeaderHash = BlockHeaderHash([0u8; 32]);
+pub const FIRST_BURNCHAIN_CONSENSUS_HASH: ConsensusHash = ConsensusHash([0u8; 20]);
+pub const FIRST_STACKS_BLOCK_HASH: BlockHeaderHash = BlockHeaderHash([0u8; 32]);
 
 pub const CHAIN_ID_MAINNET: u32 = 0x77726201;
 pub const CHAIN_ID_TESTNET: u32 = 0x80777262;
@@ -39,6 +42,13 @@ pub const BLOCK_LIMIT: ExecutionCost = ExecutionCost {
     runtime: 5_000_000_000,
 };
 
-pub const DEFAULT_WRB_EPOCH : StacksEpochId = StacksEpochId::Epoch21;
-pub const DEFAULT_WRB_CLARITY_VERSION : ClarityVersion = ClarityVersion::Clarity2;
-pub const DEFAULT_CHAIN_ID : u32 = CHAIN_ID_MAINNET;
+pub const DEFAULT_WRB_EPOCH: StacksEpochId = StacksEpochId::Epoch24;
+pub const DEFAULT_WRB_CLARITY_VERSION: ClarityVersion = ClarityVersion::Clarity2;
+pub const DEFAULT_CHAIN_ID: u32 = CHAIN_ID_MAINNET;
+
+/// convert a private key into a standard principal
+pub fn privkey_to_principal(privk: &Secp256k1PrivateKey, version: u8) -> StandardPrincipalData {
+    let pubk = Secp256k1PublicKey::from_private(privk);
+    let h = Hash160::from_node_public_key(&pubk);
+    StandardPrincipalData(version, h.0)
+}

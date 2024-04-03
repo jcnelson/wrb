@@ -15,43 +15,44 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::collections::{HashMap};
 
 use rand::Rng;
 
 use rusqlite::Connection;
-use rusqlite::Transaction;
 use rusqlite::OpenFlags;
-use rusqlite::NO_PARAMS;
 use rusqlite::ToSql;
+use rusqlite::Transaction;
+use rusqlite::NO_PARAMS;
 
 use clarity::vm::analysis::AnalysisDatabase;
-use clarity::vm::database::{
-    BurnStateDB, ClarityDatabase, HeadersDB, SqliteConnection,
-};
-use clarity::vm::errors::{
-    RuntimeErrorType, Error as ClarityError
-};
+use clarity::vm::database::{BurnStateDB, ClarityDatabase, HeadersDB, SqliteConnection};
+use clarity::vm::errors::{Error as ClarityError, RuntimeErrorType};
 
-use clarity::vm::database::SpecialCaseHandler;
 use clarity::vm::database::ClarityBackingStore;
+use clarity::vm::database::SpecialCaseHandler;
 use stacks_common::types::chainstate::BlockHeaderHash;
-use stacks_common::types::chainstate::{StacksBlockId};
+use stacks_common::types::chainstate::StacksBlockId;
 use stacks_common::util::hash::Sha512Trunc256Sum;
 
-use crate::storage::Error;
-use crate::storage::WrbDB;
-use crate::storage::WrbHeadersDB;
-use crate::storage::ReadOnlyWrbStore;
-use crate::storage::WritableWrbStore;
-use crate::storage::WriteBuffer;
-use crate::storage::util::*;
-use crate::util::sqlite::{sqlite_open, tx_begin_immediate, query_row, u64_to_sql, Error as db_error};
+use crate::vm::storage::util::*;
+use crate::vm::storage::Error;
+use crate::vm::storage::ReadOnlyWrbStore;
+use crate::vm::storage::WrbDB;
+use crate::vm::storage::WrbHeadersDB;
+use crate::vm::storage::WritableWrbStore;
+use crate::vm::storage::WriteBuffer;
+use crate::util::sqlite::{
+    query_row, sqlite_open, tx_begin_immediate, u64_to_sql, Error as db_error,
+};
 
-use crate::vm::{GENESIS_BLOCK_ID, BOOT_BLOCK_ID};
+use crate::vm::special::handle_wrb_contract_call_special_cases;
+use crate::vm::{BOOT_BLOCK_ID, GENESIS_BLOCK_ID};
 
-const SCHEMA_VERSION : &'static str = "1";
+use clarity::vm::errors::Error as clarity_error;
+
+const SCHEMA_VERSION: &'static str = "1";
 
 const KV_SCHEMA: &'static [&'static str] = &[
     r#"
@@ -60,7 +61,7 @@ const KV_SCHEMA: &'static [&'static str] = &[
         height INTEGER NOT NULL,
         key TEXT NOT NULL,
         data_hash TEXT NOT NULL,
-        PRIMARY KEY(chain_tip, height, key, data_hash)
+        PRIMARY KEY(chain_tip, height, key)
     );
     "#,
     r#"
@@ -79,52 +80,92 @@ const KV_SCHEMA: &'static [&'static str] = &[
 ];
 
 /// Get the height of a block hash, without regards to the open chain tip
-fn tipless_get_block_height_of(conn: &Connection, bhh: &StacksBlockId) -> Result<Option<u64>, Error> {
-    if bhh == &GENESIS_BLOCK_ID || bhh == &BOOT_BLOCK_ID {
-        return Ok(Some(0))
+fn tipless_get_block_height_of(
+    conn: &Connection,
+    bhh: &StacksBlockId,
+) -> Result<Option<u64>, Error> {
+    if bhh == &BOOT_BLOCK_ID {
+        return Ok(Some(0));
     }
-    query_row::<u64, _>(conn, "SELECT height FROM kvstore WHERE chain_tip = ?1", &[bhh as &dyn ToSql])
-        .map_err(|e| e.into())
+    let tip_opt = query_row::<u64, _>(
+        conn,
+        "SELECT height FROM kvstore WHERE chain_tip = ?1",
+        &[bhh as &dyn ToSql],
+    )
+    .map_err(|e| Error::DBError(e.into()))?;
+
+    if let Some(tip_height) = &tip_opt {
+        if bhh != &GENESIS_BLOCK_ID {
+            assert!(*tip_height > 0, "BUG: bhh = {} height {}", bhh, tip_height);
+        }
+    }
+    Ok(tip_opt)
 }
 
 /// Check to see if the block hash exists in the K/V
-fn check_block_hash(conn: &Connection, tip_height: u64, bhh: &StacksBlockId) -> Result<bool, Error> {
-    match query_row::<i64, _>(conn, "SELECT 1 FROM kvstore WHERE chain_tip = ?1 AND height <= ?2", &[bhh as &dyn ToSql, &u64_to_sql(tip_height)?]) {
+fn check_block_hash(
+    conn: &Connection,
+    tip_height: u64,
+    bhh: &StacksBlockId,
+) -> Result<bool, Error> {
+    match query_row::<i64, _>(
+        conn,
+        "SELECT 1 FROM kvstore WHERE chain_tip = ?1 AND height <= ?2",
+        &[bhh as &dyn ToSql, &u64_to_sql(tip_height)?],
+    ) {
         Ok(Some(_)) => Ok(true),
         Ok(None) => Ok(false),
-        Err(e) => Err(e.into())
+        Err(e) => Err(e.into()),
     }
 }
 
 /// Get the height of a block hash
-fn get_block_height_of(conn: &Connection, tip_height: u64, bhh: &StacksBlockId) -> Result<Option<u64>, Error> {
-    query_row::<u64, _>(conn, "SELECT height FROM kvstore WHERE chain_tip = ?1 AND height <= ?2", &[bhh as &dyn ToSql, &u64_to_sql(tip_height)?])
-        .map_err(|e| e.into())
+fn get_block_height_of(
+    conn: &Connection,
+    tip_height: u64,
+    bhh: &StacksBlockId,
+) -> Result<Option<u64>, Error> {
+    query_row::<u64, _>(
+        conn,
+        "SELECT height FROM kvstore WHERE chain_tip = ?1 AND height <= ?2",
+        &[bhh as &dyn ToSql, &u64_to_sql(tip_height)?],
+    )
+    .map_err(|e| e.into())
 }
 
 /// Get the hash of a block given a height
-fn get_block_at_height(conn: &Connection, tip_height: u64, height: u64) -> Result<Option<StacksBlockId>, Error> {
+fn get_block_at_height(
+    conn: &Connection,
+    tip_height: u64,
+    height: u64,
+) -> Result<Option<StacksBlockId>, Error> {
     if tip_height < height {
-        return Ok(None)
+        return Ok(None);
     }
-    query_row::<StacksBlockId, _>(conn, "SELECT chain_tip FROM kvstore WHERE height = ?1", &[&u64_to_sql(tip_height)?])
-        .map_err(|e| e.into())
+    query_row::<StacksBlockId, _>(
+        conn,
+        "SELECT chain_tip FROM kvstore WHERE height = ?1",
+        &[&u64_to_sql(height)?],
+    )
+    .map_err(|e| e.into())
 }
 
 /// Get the hash of a value given the block hash and tip height
 fn get_hash(conn: &Connection, tip_height: u64, key: &str) -> Result<Option<String>, Error> {
-    let args : &[&dyn ToSql] = &[&key.to_string(), &u64_to_sql(tip_height)?];
-    query_row::<String, _>(conn, "SELECT data_hash FROM kvstore WHERE key = ?1 AND height = ?2", args)
-        .map_err(|e| e.into())
+    let args: &[&dyn ToSql] = &[&key.to_string(), &u64_to_sql(tip_height)?];
+    query_row::<String, _>(
+        conn,
+        "SELECT data_hash FROM kvstore WHERE key = ?1 AND height = ?2",
+        args,
+    )
+    .map_err(|e| e.into())
 }
 
 /// Get the highest height stored
 fn tipless_get_highest_tip_height(conn: &Connection) -> Result<u64, Error> {
     query_row::<u64, _>(conn, "SELECT IFNULL(MAX(height),0) FROM kvstore", NO_PARAMS)
         .map_err(|e| e.into())
-        .and_then(|height_opt| {
-            Ok(height_opt.unwrap_or(0))
-        })
+        .and_then(|height_opt| Ok(height_opt.unwrap_or(0)))
 }
 
 impl WrbHeadersDB {
@@ -134,10 +175,7 @@ impl WrbHeadersDB {
 }
 
 impl WrbDB {
-    fn setup_db(
-        path_str: &str,
-        domain: &str
-    ) -> Result<Connection, Error> {
+    fn setup_db(path_str: &str, domain: &str) -> Result<Connection, Error> {
         let mut path = PathBuf::from(path_str);
         path.push(domain);
 
@@ -146,8 +184,7 @@ impl WrbDB {
         path.push("db.sqlite");
         let open_flags = if std::fs::metadata(&path).is_ok() {
             OpenFlags::SQLITE_OPEN_READ_WRITE
-        }
-        else {
+        } else {
             OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_READ_WRITE
         };
 
@@ -160,25 +197,37 @@ impl WrbDB {
 
         let tx = tx_begin_immediate(&mut conn)?;
 
-        SqliteConnection::initialize_conn(&tx)
-            .map_err(|e| {
-                error!("Failed to initialize DB: {:?}", &e);
-                Error::InitializationFailure
-            })?;
+        SqliteConnection::initialize_conn(&tx).map_err(|e| {
+            error!("Failed to initialize DB: {:?}", &e);
+            Error::InitializationFailure
+        })?;
 
         for cmd in KV_SCHEMA.iter() {
             tx.execute(cmd, NO_PARAMS)?;
         }
 
+        // sentinel boot block state
+        let values: &[&dyn ToSql] = &[
+            &BOOT_BLOCK_ID,
+            &0,
+            &"genesis".to_string(),
+            &format!("{}", &BOOT_BLOCK_ID),
+        ];
+        tx.execute(
+            "REPLACE INTO kvstore (chain_tip, height, key, data_hash) VALUES (?1, ?2, ?3, ?4)",
+            values,
+        )
+        .map_err(|e| Error::DBError(db_error::SqliteError(e)))?;
+
         tx.commit()?;
         Ok(conn)
     }
-    
+
     fn open_readonly(path_str: &str, domain: &str) -> Result<Connection, Error> {
         let mut path = PathBuf::from(path_str);
         path.push(domain);
         path.push("db.sqlite");
-        
+
         let conn = sqlite_open(&path, OpenFlags::SQLITE_OPEN_READ_ONLY, true)?;
         Ok(conn)
     }
@@ -191,17 +240,17 @@ impl WrbDB {
         let conn = WrbDB::setup_db(path_str, domain)?;
         let chain_tip = match chain_tip {
             Some(ref tip) => (*tip).clone(),
-            None => BOOT_BLOCK_ID.clone()
+            None => BOOT_BLOCK_ID.clone(),
         };
 
         Ok(WrbDB {
             db_path: path_str.to_string(),
             domain: domain.to_string(),
             conn,
-            chain_tip
+            chain_tip,
         })
     }
-   
+
     /// Get a ref to the inner connection
     pub fn conn(&self) -> &Connection {
         &self.conn
@@ -217,17 +266,14 @@ impl WrbDB {
         let conn = Self::open_readonly(&self.db_path, &self.domain)
             .expect("FATAL: could not open read only");
 
-        WrbHeadersDB {
-            conn
-        }
+        WrbHeadersDB { conn }
     }
 
     /// Begin a read-only session at a particular point in time.
-    pub fn begin_read_only<'a>(
-        &'a self,
-        at_block: Option<&StacksBlockId>,
-    ) -> ReadOnlyWrbStore<'a> {
-        let chain_tip = at_block.map(|b| (*b).clone()).unwrap_or(self.chain_tip.clone());
+    pub fn begin_read_only<'a>(&'a self, at_block: Option<&StacksBlockId>) -> ReadOnlyWrbStore<'a> {
+        let chain_tip = at_block
+            .map(|b| (*b).clone())
+            .unwrap_or(self.chain_tip.clone());
         let tip_height = tipless_get_block_height_of(&self.conn, &chain_tip)
             .expect("FATAL: DB error")
             .expect(&format!("FATAL: do not have height for tip {}", &chain_tip));
@@ -235,7 +281,7 @@ impl WrbDB {
         ReadOnlyWrbStore {
             chain_tip,
             tip_height,
-            conn: &self.conn
+            conn: &self.conn,
         }
     }
 
@@ -252,29 +298,30 @@ impl WrbDB {
         current: &StacksBlockId,
         next: &StacksBlockId,
     ) -> WritableWrbStore<'a> {
-        let tx = tx_begin_immediate(&mut self.conn)
-            .expect("FATAL: could not begin transaction");
+        let tx = tx_begin_immediate(&mut self.conn).expect("FATAL: could not begin transaction");
 
         let tip_height = tipless_get_block_height_of(&tx, current)
             .expect("DB failure")
             .expect(&format!("FATAL: do not have height for tip {}", current));
 
-        let current_tip_height = 
-            if current == &BOOT_BLOCK_ID {
-                0
-            }
-            else {
-                get_block_height_of(&tx, tip_height, current)
-                    .expect("DB failure")
-                    .expect(&format!("FATAL: given tip {} has no known block height as of tip {} (height {})", current, current, tip_height))
-            };
+        let current_tip_height = if current == &BOOT_BLOCK_ID {
+            0
+        } else {
+            get_block_height_of(&tx, tip_height, current)
+                .expect("DB failure")
+                .expect(&format!(
+                    "FATAL: given tip {} has no known block height as of tip {} (height {})",
+                    current, current, tip_height
+                ))
+                + 1
+        };
 
         WritableWrbStore {
             chain_tip: current.clone(),
             tip_height: current_tip_height,
             next_tip: next.clone(),
             write_buf: WriteBuffer::new(),
-            tx: tx
+            tx: tx,
         }
     }
 
@@ -292,7 +339,7 @@ impl WriteBuffer {
         WriteBuffer {
             pending_hashes: vec![],
             pending_data: HashMap::new(),
-            pending_index: HashMap::new()
+            pending_index: HashMap::new(),
         }
     }
 
@@ -308,8 +355,7 @@ impl WriteBuffer {
         if let Some(idx) = self.pending_index.get(&key.to_string()) {
             let hash = &self.pending_hashes[*idx].1;
             self.pending_data.get(hash).cloned()
-        }
-        else {
+        } else {
             None
         }
     }
@@ -323,19 +369,45 @@ impl WriteBuffer {
         self.pending_data.insert(hash_hex, value.to_string());
     }
 
-    pub fn dump(&mut self, conn: &Connection, cur_tip: &StacksBlockId, next_tip: &StacksBlockId) -> Result<(), Error> {
+    pub fn dump(
+        &mut self,
+        conn: &Connection,
+        cur_tip: &StacksBlockId,
+        next_tip: &StacksBlockId,
+    ) -> Result<(), Error> {
         let next_height = match get_wrb_block_height(conn, cur_tip) {
             Some(height) => height + 1,
-            None => 0
+            None => 1,
         };
         for (key, value_hash) in self.pending_hashes.drain(..) {
-            test_debug!("Dump '{}' = '{}' at {},{}", &key, &value_hash, &next_tip, next_height);
-            let values: &[&dyn ToSql] = &[&next_tip, &u64_to_sql(next_height)?, &key, &value_hash];
-            conn.execute("REPLACE INTO kvstore (chain_tip, height, key, data_hash) VALUES (?1, ?2, ?3, ?4)", values)
-                .map_err(|e| Error::DBError(db_error::SqliteError(e)))?;
+            let (target_tip, target_height) = if cur_tip == &BOOT_BLOCK_ID {
+                (cur_tip.clone(), next_height - 1)
+            } else {
+                (next_tip.clone(), next_height)
+            };
 
-            let value = self.pending_data.get(&value_hash).cloned().expect("BUG: have hash but no value");
-            SqliteConnection::put(conn, &value_hash, &value);
+            test_debug!(
+                "Dump '{}' = '{}' at {},{} (data = {:?})",
+                &key,
+                &value_hash,
+                &target_tip,
+                target_height,
+                self.pending_data.get(&value_hash)
+            );
+            let values: &[&dyn ToSql] =
+                &[&target_tip, &u64_to_sql(target_height)?, &key, &value_hash];
+            conn.execute(
+                "REPLACE INTO kvstore (chain_tip, height, key, data_hash) VALUES (?1, ?2, ?3, ?4)",
+                values,
+            )
+            .map_err(|e| Error::DBError(db_error::SqliteError(e)))?;
+
+            let value = self
+                .pending_data
+                .get(&value_hash)
+                .cloned()
+                .expect("BUG: have hash but no value");
+            SqliteConnection::put(conn, &value_hash, &value)?;
         }
         self.pending_hashes.clear();
         self.pending_data.clear();
@@ -364,7 +436,7 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
     }
 
     fn get_cc_special_cases_handler(&self) -> Option<SpecialCaseHandler> {
-        None
+        Some(&handle_wrb_contract_call_special_cases)
     }
 
     fn set_block_hash(&mut self, bhh: StacksBlockId) -> Result<StacksBlockId, ClarityError> {
@@ -373,7 +445,9 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
         }
         let new_tip_height = tipless_get_block_height_of(self.conn, &bhh)
             .expect("FATAL: failed to query height from DB")
-            .ok_or(RuntimeErrorType::UnknownBlockHeaderHash(BlockHeaderHash(bhh.0)))?;
+            .ok_or(RuntimeErrorType::UnknownBlockHeaderHash(BlockHeaderHash(
+                bhh.0,
+            )))?;
 
         let result = Ok(self.chain_tip);
 
@@ -387,7 +461,7 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
         match get_block_height_of(self.conn, self.tip_height, &self.chain_tip) {
             Ok(Some(x)) => x.try_into().expect("FATAL: block height too high"),
             Ok(None) => {
-                if self.chain_tip == GENESIS_BLOCK_ID {
+                if self.chain_tip == BOOT_BLOCK_ID {
                     // the current block height should always work, except if it's the first block
                     // height (in which case, the current chain tip should match the first-ever
                     // index block hash).
@@ -414,8 +488,13 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
     }
 
     fn get_block_at_height(&mut self, block_height: u32) -> Option<StacksBlockId> {
-        get_block_at_height(&self.conn, self.tip_height, block_height.into())
-            .expect(&format!("FATAL: no block at height {}", block_height))
+        let bhh = get_block_at_height(&self.conn, self.tip_height, block_height.into())
+            .expect(&format!("FATAL: no block at height {}", block_height));
+        debug!(
+            "bhh at height {} for {} = {:?}",
+            block_height, self.tip_height, &bhh
+        );
+        bhh
     }
 
     fn get_open_chain_tip(&mut self) -> StacksBlockId {
@@ -423,24 +502,35 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
     }
 
     fn get_open_chain_tip_height(&mut self) -> u32 {
+        debug!(
+            "Open chain tip is {} (tip is {})",
+            self.tip_height, &self.chain_tip
+        );
         self.tip_height.try_into().expect("Block height too high")
     }
 
-    fn get(&mut self, key: &str) -> Option<String> {
-        trace!("ClarityKV get: {:?} tip={}", key, &self.chain_tip);
-        let hash = get_hash(self.conn, self.tip_height, key)
-            .expect("FATAL: kvstore read error")?;
-        let value = SqliteConnection::get(self.get_side_store(), &hash)
-            .expect(&format!("FATAL: kvstore contained value hash not found in side storage: {}", &hash));
+    fn get(&mut self, key: &str) -> Result<Option<String>, clarity_error> {
+        for height in (0..self.tip_height + 1).rev() {
+            test_debug!("Get hash for '{}' at height {}", key, self.tip_height);
+            let Some(hash) = get_hash(self.conn, height, key).map_err(|e| clarity_error::Interpreter(clarity::vm::errors::InterpreterError::Expect(format!("failed to get hash: {:?}", &e))))? else {
+                continue;
+            };
+            test_debug!("Hash for '{}' at height {} is '{}'", key, height, &hash);
+            let value_opt = SqliteConnection::get(self.get_side_store(), &hash).expect(&format!(
+                "FATAL: kvstore contained value hash not found in side storage: {}",
+                &hash
+            ));
 
-        Some(value)
+            return Ok(value_opt);
+        }
+        Ok(None)
     }
 
-    fn get_with_proof(&mut self, _: &str) -> Option<(String, Vec<u8>)> {
+    fn get_with_proof(&mut self, _: &str) -> Result<Option<(String, Vec<u8>)>, clarity_error> {
         unimplemented!()
     }
 
-    fn put_all(&mut self, _items: Vec<(String, String)>) {
+    fn put_all(&mut self, _items: Vec<(String, String)>) -> Result<(), clarity_error> {
         error!("Attempted to commit changes to read-only K/V");
         panic!("BUG: attempted commit to read-only K/V");
     }
@@ -459,16 +549,30 @@ impl<'a> WritableWrbStore<'a> {
         AnalysisDatabase::new(self)
     }
 
-    pub fn commit_to(mut self, final_bhh: &StacksBlockId) {
-        debug!("commit_to({})", final_bhh);
-        SqliteConnection::commit_metadata_to(&self.tx, &self.chain_tip, final_bhh);
-        self.write_buf.dump(&self.tx, &self.chain_tip, final_bhh)
-            .expect("FATAL: failed to store written buffer to the DB");
+    pub fn commit_to(mut self, final_bhh: &StacksBlockId) -> Result<(), Error> {
+        let target_tip = if self.chain_tip == BOOT_BLOCK_ID {
+            &self.chain_tip
+        } else {
+            &self.next_tip
+        };
 
-        self.tx.commit().expect("FATAL: failed to commit changes");
+        test_debug!("commit_to({} --> {})", target_tip, final_bhh);
+        SqliteConnection::commit_metadata_to(&self.tx, target_tip, final_bhh)?;
+        self.write_buf
+            .dump(&self.tx, target_tip, final_bhh)?;
+
+        let args: &[&dyn ToSql] = &[final_bhh, target_tip];
+        self.tx
+            .execute(
+                "UPDATE kvstore SET chain_tip = ?1 WHERE chain_tip = ?2",
+                args,
+            )?;
+
+        self.tx.commit()?;
+        Ok(())
     }
 
-    pub fn commit(self) {
+    pub fn commit(self) -> Result<(), Error> {
         let final_bhh = self.next_tip.clone();
         self.commit_to(&final_bhh)
     }
@@ -480,12 +584,17 @@ impl<'a> WritableWrbStore<'a> {
 
 impl<'a> ClarityBackingStore for WritableWrbStore<'a> {
     fn set_block_hash(&mut self, bhh: StacksBlockId) -> Result<StacksBlockId, ClarityError> {
-        if !check_block_hash(&self.tx, self.tip_height, &bhh).expect("FATAL: failed to query hash from DB") {
-            return Err(RuntimeErrorType::UnknownBlockHeaderHash(BlockHeaderHash(bhh.0)).into())
+        if !check_block_hash(&self.tx, self.tip_height, &bhh)
+            .expect("FATAL: failed to query hash from DB")
+        {
+            return Err(RuntimeErrorType::UnknownBlockHeaderHash(BlockHeaderHash(bhh.0)).into());
         }
         let new_tip_height = tipless_get_block_height_of(&self.tx, &bhh)
             .expect("FATAL: failed to query height for hash in DB")
-            .ok_or(ClarityError::Runtime(RuntimeErrorType::UnknownBlockHeaderHash(BlockHeaderHash(bhh.0)), None))?;
+            .ok_or(ClarityError::Runtime(
+                RuntimeErrorType::UnknownBlockHeaderHash(BlockHeaderHash(bhh.0)),
+                None,
+            ))?;
 
         let result = Ok(self.chain_tip);
 
@@ -496,25 +605,32 @@ impl<'a> ClarityBackingStore for WritableWrbStore<'a> {
     }
 
     fn get_cc_special_cases_handler(&self) -> Option<SpecialCaseHandler> {
-        None
+        Some(&handle_wrb_contract_call_special_cases)
     }
 
-    fn get(&mut self, key: &str) -> Option<String> {
+    fn get(&mut self, key: &str) -> Result<Option<String>, clarity_error> {
         if let Some(ref value) = self.write_buf.get(key) {
-            Some(value.clone())
+            return Ok(Some(value.clone()));
         }
-        else if let Some(ref value_hash) = get_hash(&self.tx, self.tip_height, key).expect("FATAL: failed to query hash from DB") {
-            Some(SqliteConnection::get(&self.tx, value_hash).expect(&format!(
-                "ERROR: K/V contained value_hash not found in side storage: {}",
-                value_hash
-            )))
+        for height in (0..self.tip_height + 1).rev() {
+            let hash_opt = get_hash(&self.tx, height, key).expect("FATAL: kvstore read error");
+
+            if hash_opt.is_none() {
+                continue;
+            }
+
+            let hash = hash_opt.unwrap();
+            let value_opt = SqliteConnection::get(self.get_side_store(), &hash).expect(&format!(
+                "FATAL: kvstore contained value hash not found in side storage: {}",
+                &hash
+            ));
+
+            return Ok(value_opt);
         }
-        else {
-            None
-        }
+        Ok(None)
     }
 
-    fn get_with_proof(&mut self, _key: &str) -> Option<(String, Vec<u8>)> {
+    fn get_with_proof(&mut self, _key: &str) -> Result<Option<(String, Vec<u8>)>, clarity_error> {
         unimplemented!()
     }
 
@@ -522,24 +638,31 @@ impl<'a> ClarityBackingStore for WritableWrbStore<'a> {
         &self.tx
     }
 
-    fn get_block_at_height(&mut self, height: u32) -> Option<StacksBlockId> {
-        get_block_at_height(&self.tx, self.tip_height, height.into())
-            .expect("FATAL: failed to query block at height from DB")
+    fn get_block_at_height(&mut self, block_height: u32) -> Option<StacksBlockId> {
+        let bhh = get_block_at_height(&self.tx, self.tip_height, block_height.into())
+            .expect(&format!("FATAL: no block at height {}", block_height));
+        bhh
     }
 
     fn get_open_chain_tip(&mut self) -> StacksBlockId {
-        self.chain_tip.clone()
+        if self.chain_tip == BOOT_BLOCK_ID {
+            self.chain_tip.clone()
+        } else {
+            self.next_tip.clone()
+        }
     }
 
     fn get_open_chain_tip_height(&mut self) -> u32 {
-        self.tip_height.try_into().expect("FATAL: block height too big")
+        self.tip_height
+            .try_into()
+            .expect("FATAL: block height too big")
     }
 
     fn get_current_block_height(&mut self) -> u32 {
         match get_block_height_of(&self.tx, self.tip_height, &self.chain_tip) {
             Ok(Some(x)) => x.try_into().expect("FATAL: block height too big"),
             Ok(None) => {
-                if self.chain_tip == GENESIS_BLOCK_ID {
+                if self.chain_tip == BOOT_BLOCK_ID {
                     // the current block height should always work, except if it's the first block
                     // height (in which case, the current chain tip should match the first-ever
                     // index block hash).
@@ -565,12 +688,14 @@ impl<'a> ClarityBackingStore for WritableWrbStore<'a> {
         }
     }
 
-    fn put_all(&mut self, items: Vec<(String, String)>) {
+    fn put_all(&mut self, items: Vec<(String, String)>) -> Result<(), clarity_error> {
         for (key, value) in items.into_iter() {
             self.write_buf.put(&key, &value);
         }
-        self.write_buf.dump(&self.tx, &self.chain_tip, &self.next_tip)
+        self.write_buf
+            .dump(&self.tx, &self.chain_tip, &self.next_tip)
             .expect("FATAL: DB error");
+
+        Ok(())
     }
 }
-

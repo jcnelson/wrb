@@ -15,13 +15,14 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use crate::core;
+use crate::core::Config;
 use crate::runner::Runner;
-use crate::runner::Config;
 
 #[test]
 fn test_wallet_seed_phrase() {
-    let config = Config::default(false, "http://localhost:20443", "http://localhost:3000");
-    let runner = Runner::new(config);
+    core::init(false, "localhost", 20443);
+    let runner = Runner::new();
 
     let seed_phrase = runner.wallet_seed_phrase().unwrap();
     eprintln!("{}", &seed_phrase);
