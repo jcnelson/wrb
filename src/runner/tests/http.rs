@@ -87,7 +87,7 @@ fn test_decode_http_request_err() {
             (Error::Deserialize(..), Error::Deserialize(..)) => {}
             (Error::MalformedRequest(..), Error::MalformedRequest(..)) => {}
             (x, y) => {
-                error!("expected error mismatch: {:?} != {:?}", &y, &x);
+                wrb_error!("expected error mismatch: {:?} != {:?}", &y, &x);
                 panic!();
             }
         }
@@ -138,7 +138,7 @@ fn test_decode_http_response_err() {
             (Error::Deserialize(_), Error::Deserialize(_)) => {}
             (Error::MalformedResponse(_), Error::MalformedResponse(_)) => {}
             (x, y) => {
-                error!("expected error mismatch: {:?} != {:?}", &y, &x);
+                wrb_error!("expected error mismatch: {:?} != {:?}", &y, &x);
                 panic!();
             }
         }

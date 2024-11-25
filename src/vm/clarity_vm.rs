@@ -45,7 +45,13 @@ use clarity::vm::analysis::AnalysisDatabase;
 use clarity::vm::database::BurnStateDB;
 use clarity::vm::database::ClarityDatabase;
 use clarity::vm::database::HeadersDB;
-
+use clarity::vm::eval_all;
+use clarity::vm::ClarityVersion;
+use clarity::vm::Value;
+use clarity::vm::ContractContext;
+use clarity::vm::database::MemoryBackingStore;
+use clarity::vm::contexts::GlobalContext;
+use clarity::vm::ast;
 use crate::vm::storage;
 
 use crate::vm::storage::util::*;
@@ -61,6 +67,7 @@ use crate::vm::WRB_LOW_LEVEL_CONTRACT;
 use stacks_common::types::chainstate::StacksBlockId;
 use stacks_common::util::hash::to_hex;
 use stacks_common::util::hash::Hash160;
+use stacks_common::address::{C32_ADDRESS_VERSION_MAINNET_SINGLESIG, C32_ADDRESS_VERSION_TESTNET_SINGLESIG};
 
 use crate::core::with_global_config;
 
@@ -100,7 +107,35 @@ pub fn run_analysis_free<C: ClarityStorage>(
         LimitedCostTracker::new_free(),
         DEFAULT_WRB_EPOCH,
         DEFAULT_WRB_CLARITY_VERSION,
+        false,
     )
+}
+
+/// Execute program in a transient environment.
+pub fn vm_execute(program: &str, clarity_version: ClarityVersion) -> Result<Option<Value>, Error> {
+    let contract_id = QualifiedContractIdentifier::transient();
+    let mut contract_context = ContractContext::new(contract_id.clone(), clarity_version);
+    let mut marf = MemoryBackingStore::new();
+    let conn = marf.as_clarity_db();
+    let mut global_context = GlobalContext::new(
+        true,
+        DEFAULT_CHAIN_ID,
+        conn,
+        LimitedCostTracker::new_free(),
+        DEFAULT_WRB_EPOCH,
+    );
+    Ok(global_context.execute(|g| {
+        let parsed = ast::build_ast_with_rules(
+            &contract_id,
+            program,
+            &mut (),
+            clarity_version,
+            DEFAULT_WRB_EPOCH,
+            ASTRules::PrecheckSize,
+        )?
+        .expressions;
+        eval_all(&parsed, &mut contract_context, g, None)
+    })?)
 }
 
 impl ClarityStorage for WritableWrbStore<'_> {
@@ -134,6 +169,7 @@ impl ClarityStorage for ReadOnlyWrbStore<'_> {
 impl ClarityVM {
     pub fn new(db_path: &str, domain: &str) -> Result<ClarityVM, Error> {
         let wrbdb = WrbDB::open(db_path, domain, None)?;
+        let created = wrbdb.created();
         let mainnet = with_global_config(|cfg| cfg.mainnet())
             .ok_or(Error::NotInitialized)?;
         
@@ -155,7 +191,9 @@ impl ClarityVM {
             app_namespace: namespace.to_string(),
         };
 
-        vm.install_boot_code(BOOT_CODE)?;
+        if created {
+            vm.install_boot_code(BOOT_CODE)?;
+        }
         Ok(vm)
     }
 
@@ -168,7 +206,7 @@ impl ClarityVM {
         ));
         let next_tip = make_wrb_chain_tip(cur_height + 1);
 
-        debug!(
+        wrb_debug!(
             "Begin page load {},{} -> {},{}",
             &cur_tip,
             cur_height,
@@ -220,7 +258,13 @@ impl ClarityVM {
     /// Get the code ID for the page
     pub fn get_code_id(&self) -> QualifiedContractIdentifier {
         let hash = Hash160::from_data(&self.db.get_domain().as_bytes());
-        QualifiedContractIdentifier::new(StandardPrincipalData(1, hash.0), "main".into())
+        let version = if self.mainnet {
+            C32_ADDRESS_VERSION_MAINNET_SINGLESIG
+        }
+        else {
+            C32_ADDRESS_VERSION_TESTNET_SINGLESIG
+        };
+        QualifiedContractIdentifier::new(StandardPrincipalData(version, hash.0), "main".into())
     }
 
     /// Does there exist a code body with this ID?
@@ -265,7 +309,7 @@ impl ClarityVM {
                 continue;
             }
 
-            debug!(
+            wrb_debug!(
                 "Instantiate boot code contract '{}' ({} bytes)...",
                 &contract_identifier,
                 boot_code_contract.len()
@@ -274,12 +318,12 @@ impl ClarityVM {
             let mut ast =
                 parse(&contract_identifier, &contract_content).expect("Failed to parse program");
 
-            debug!("Analyze contract {}", &contract_identifier);
+            wrb_debug!("Analyze contract {}", &contract_identifier);
             run_analysis_free(&contract_identifier, &mut ast, &mut write_tx, true).expect(
                 &format!("FATAL: failed to analyze {}", &contract_identifier),
             );
 
-            debug!("Deploy contract {}", &contract_identifier);
+            wrb_debug!("Deploy contract {}", &contract_identifier);
             let mut db = write_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
             db.begin();
             let mut vm_env =
@@ -305,7 +349,7 @@ impl ClarityVM {
         }
 
         // set domain name and code hash
-        debug!("Set app name to {}.{}", name, namespace);
+        wrb_debug!("Set app name to {}.{}", name, namespace);
 
         let ll_contract_id = QualifiedContractIdentifier::new(
             boot_code_addr(mainnet).into(),

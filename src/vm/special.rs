@@ -53,6 +53,9 @@ use clarity::vm::ClarityVersion;
 use clarity::vm::ContractContext;
 
 use stacks_common::util::hash::{to_hex, Hash160};
+use stacks_common::types::chainstate::StacksPrivateKey;
+
+use crate::runner::stackerdb::StackerDBSession;
 
 fn env_with_global_context<F, A, E>(
     global_context: &mut GlobalContext,
@@ -84,15 +87,29 @@ where
 }
 
 #[cfg(test)]
-fn get_stackerdb_client(_runner: &Runner, _contract: QualifiedContractIdentifier) -> Result<Box<dyn StackerDBClient>, Error> {
-    Ok(Box::new(MockStackerDBClient::new(16)))
+pub fn get_home_stackerdb_client(_runner: &mut Runner, _contract: QualifiedContractIdentifier, privkey: StacksPrivateKey) -> Result<Box<dyn StackerDBClient>, Error> {
+    Ok(Box::new(MockStackerDBClient::new(privkey, 16)))
+}
+
+#[cfg(test)]
+pub fn get_replica_stackerdb_client(_runner: &mut Runner, _contract: QualifiedContractIdentifier, privkey: StacksPrivateKey) -> Result<Box<dyn StackerDBClient>, Error> {
+    Ok(Box::new(MockStackerDBClient::new(privkey, 16)))
+}
+
+
+#[cfg(not(test))]
+pub fn get_home_stackerdb_client(runner: &mut Runner, contract: QualifiedContractIdentifier, _ignored: StacksPrivateKey) -> Result<Box<dyn StackerDBClient>, Error> {
+    let node_addr = runner.resolve_node()
+        .map_err(|e| Error::Interpreter(InterpreterError::InterpreterError(format!("Unable to resolve node: {:?}", &e)).into()))?
+        .ok_or(InterpreterError::InterpreterError("Unable to resolve node".to_string()))?;
+
+    Ok(Box::new(StackerDBSession::new(node_addr, contract)))
 }
 
 #[cfg(not(test))]
-fn get_stackerdb_client(runner: &Runner, contract: QualifiedContractIdentifier) -> Result<Box<dyn StackerDBClient>, Error> {
-    let node_addr = runner.resolve_node()
-        .map_err(|e| InterpreterError::InterpreterError(format!("Unable to resolve {}:{}: {:?}", &node_host, &node_port, &e)).into())?
-        .ok_or(InterpreterError::InterpreterError(format!("Unable to resolve {}:{}", &node_host, &node_port)))?;
+pub fn get_replica_stackerdb_client(runner: &mut Runner, contract: QualifiedContractIdentifier, _ignored: StacksPrivateKey) -> Result<Box<dyn StackerDBClient>, Error> {
+    let node_addr = runner.find_stackerdb(&contract)
+        .map_err(|e| Error::Interpreter(InterpreterError::InterpreterError(format!("Unable to resolve node: {:?}", &e)).into()))?;
 
     Ok(Box::new(StackerDBSession::new(node_addr, contract)))
 }
@@ -107,43 +124,6 @@ fn err_ascii_512(msg: &str) -> Value {
     ).expect("FATAL: failed to construct error from ascii")
 }
 
-
-/// Trampoline code for contract-call to `.wrb seed-phrase`
-fn handle_generate_wrb_seed_phrase(
-    global_context: &mut GlobalContext,
-    sender: PrincipalData,
-    sponsor: Option<PrincipalData>,
-    contract_id: &QualifiedContractIdentifier,
-    wrb_lowlevel_contract: Contract,
-    runner: Runner,
-) -> Result<(), Error> {
-    let value = match runner.wallet_seed_phrase() {
-        Ok(seed_phrase) => Value::okay(Value::from(ASCIIData {
-            data: seed_phrase.as_bytes().to_vec(),
-        }))
-        .unwrap(),
-        Err(e) => {
-            err_ascii_512(&format!("wrb: failed to generate seed phrase: {:?}", &e))
-        }
-    };
-
-    env_with_global_context(
-        global_context,
-        sender,
-        sponsor,
-        wrb_lowlevel_contract.contract_context,
-        |env| {
-            env.execute_contract_allow_private(
-                contract_id,
-                "set-last-wrb-seed-phrase",
-                &[SymbolicExpression::atom_value(value)],
-                false,
-            )
-        },
-    )
-    .expect("FATAL: failed to set seed phrase");
-    Ok(())
-}
 
 /// Trampoline code for contract-call to `.wrb call-readonly`
 fn handle_wrb_call_readonly(
@@ -188,7 +168,7 @@ fn handle_wrb_call_readonly(
             )
         })?;
 
-        debug!("arg: {:?}", &val);
+        wrb_debug!("arg: {:?}", &val);
         args.push(val);
     }
 
@@ -343,7 +323,7 @@ pub fn handle_wrbpod_open(
             let session_id_opt = ok_value.expect_optional()?;
             if session_id_opt.is_some() {
                 // this wrbpod is already open
-                debug!("Wrbpod already open: {}", &wrbpod_contract_id);
+                wrb_debug!("Wrbpod already open: {}", &wrbpod_contract_id);
                 return Ok(());
             }
         }
@@ -352,8 +332,10 @@ pub fn handle_wrbpod_open(
             return Ok(());
         }
     }
-    
-    let runner = Runner::new();
+  
+    let (node_host, node_port) = with_global_config(|cfg| cfg.get_node_addr()).expect("FATAL: system not initialized");
+    let bns_contract_id = with_global_config(|cfg| cfg.get_bns_contract_id()).expect("FATAL: system not initialized");
+    let mut runner = Runner::new(bns_contract_id, node_host, node_port);
 
     // is this an owned wrbpod? only true if the client's identity private key matches the target
     // contract.
@@ -364,8 +346,9 @@ pub fn handle_wrbpod_open(
     let owned = key_principal == wrbpod_contract_id.issuer;
 
     // go set up the wrbpod session 
-    let stackerdb_client = get_stackerdb_client(&runner, wrbpod_contract_id.clone())?;
-    let wrbpod_session_result = Wrbpod::open(stackerdb_client, privkey.clone())
+    let home_stackerdb_client = get_home_stackerdb_client(&mut runner, wrbpod_contract_id.clone(), privkey.clone())?;
+    let replica_stackerdb_client = get_replica_stackerdb_client(&mut runner, wrbpod_contract_id.clone(), privkey.clone())?;
+    let wrbpod_session_result = Wrbpod::open(home_stackerdb_client, replica_stackerdb_client, privkey.clone())
         .map_err(|e| format!("Failed to open wrbpod session to {}: {:?}", &wrbpod_contract_id, &e));
 
     match wrbpod_session_result {
@@ -648,7 +631,7 @@ pub fn handle_wrbpod_fetch_slot(
 
     let session_id = args[0].clone().expect_u128()?;
     let Ok(app_slot_id) = u32::try_from(args[1].clone().expect_u128()?) else {
-        warn!("app slot is too big");
+        wrb_warn!("app slot is too big");
         env_with_global_context(
             global_context,
             sender,
@@ -676,14 +659,14 @@ pub fn handle_wrbpod_fetch_slot(
     // go fetch that app state chunk
     let fetch_res = with_globals(|globals| {
         let Some(wrbpod) = globals.get_wrbpod_session(session_id) else {
-            warn!("wrbpod.fetch_chunk({}.{}, {}): no such session", &name, &namespace, app_slot_id);
+            wrb_warn!("wrbpod.fetch_chunk({}.{}, {}): no such session", &name, &namespace, app_slot_id);
             return Err("no such session".to_string());
         };
         match wrbpod.fetch_chunk(&format!("{}.{}", &name, &namespace), app_slot_id) {
-            Ok(res) => Ok((res.0, res.1.to_bytes_compressed())),
-            Err(WrbpodError::NoSuchChunk) => Ok((0, vec![0x00; 33])),   // chunk is not yet written,
+            Ok(res) => Ok((res.0, res.1.map(|pk| pk.to_bytes_compressed()))),
+            Err(WrbpodError::NoSuchChunk) => Ok((0, None)),   // chunk is not yet written,
             Err(e) => {
-                warn!("wrbpod.fetch_chunk({}.{}, {}): {:?}", &name, &namespace, app_slot_id, &e);
+                wrb_warn!("wrbpod.fetch_chunk({}.{}, {}): {:?}", &name, &namespace, app_slot_id, &e);
                 Err(format!("{:?}", &e))
             }
         }
@@ -695,7 +678,7 @@ pub fn handle_wrbpod_fetch_slot(
                 TupleData::from_data(
                     vec![
                         ("version".into(), Value::UInt(res.0.into())),
-                        ("signer".into(), Value::buff_from(res.1).unwrap())
+                        ("signer".into(), res.1.map(|pk_bytes| Value::some(Value::buff_from(pk_bytes).unwrap()).unwrap()).unwrap_or(Value::none()))
                     ]).unwrap()
                 )
             ).unwrap(),
@@ -747,7 +730,7 @@ pub fn handle_wrbpod_get_slice(
     let session_id = args[0].clone().expect_u128()?;
     let slice_id = args[2].clone().expect_u128()?;
     let Ok(app_slot_id) = u32::try_from(args[1].clone().expect_u128()?) else {
-        warn!("app slot is too big");
+        wrb_warn!("app slot is too big");
         env_with_global_context(
             global_context,
             sender,
@@ -776,12 +759,12 @@ pub fn handle_wrbpod_get_slice(
     // go fetch that slice
     let slice_res = with_globals(|globals| {
         let Some(wrbpod) = globals.get_wrbpod_session(session_id) else {
-            warn!("wrbpod.get_slice({}.{}, {}): no such session", &name, &namespace, app_slot_id);
+            wrb_warn!("wrbpod.get_slice({}.{}, {}): no such session", &name, &namespace, app_slot_id);
             return Err("no such session".to_string());
         };
         wrbpod.get_slice(&format!("{}.{}", &name, &namespace), app_slot_id, slice_id)
             .ok_or_else(|| {
-                warn!("wrbpod.get_slice({},{}): no such slice", app_slot_id, slice_id);
+                wrb_warn!("wrbpod.get_slice({},{}): no such slice", app_slot_id, slice_id);
                 format!("no such slice")
             })
     });
@@ -837,7 +820,7 @@ pub fn handle_wrbpod_put_slice(
     let session_id = args[0].clone().expect_u128()?;
     let slice_id = args[2].clone().expect_u128()?;
     let Ok(app_slot_id) = u32::try_from(args[1].clone().expect_u128()?) else {
-        warn!("app slot is too big");
+        wrb_warn!("app slot is too big");
         env_with_global_context(
             global_context,
             sender,
@@ -867,7 +850,7 @@ pub fn handle_wrbpod_put_slice(
     // go fetch that slice
     let put_res = with_globals(|globals| {
         let Some(wrbpod) = globals.get_wrbpod_session(session_id) else {
-            warn!("wrbpod.put_slice({}.{}, {}): no such session", &name, &namespace, app_slot_id);
+            wrb_warn!("wrbpod.put_slice({}.{}, {}): no such session", &name, &namespace, app_slot_id);
             return Err("no such session".to_string());
         };
         Ok(wrbpod.put_slice(&format!("{}.{}", &name, &namespace), app_slot_id, slice_id, slice_data))
@@ -921,7 +904,7 @@ pub fn handle_wrbpod_sync_slot(
 
     let session_id = args[0].clone().expect_u128()?;
     let Ok(app_slot_id) = u32::try_from(args[1].clone().expect_u128()?) else {
-        warn!("app slot is too big");
+        wrb_warn!("app slot is too big");
         env_with_global_context(
             global_context,
             sender,
@@ -948,12 +931,12 @@ pub fn handle_wrbpod_sync_slot(
 
     let res = with_globals(|globals| {
         let Some(wrbpod) = globals.get_wrbpod_session(session_id) else {
-            warn!("wrbpod.sync: no such session {}", session_id);
+            wrb_warn!("wrbpod.sync: no such session {}", session_id);
             return Err("no such session".to_string());
         };
         wrbpod.sync_slot(&format!("{}.{}", &name, &namespace), app_slot_id)
             .map_err(|e| {
-                warn!("Failed to put slot {}.{} {}: {:?}", &name, &namespace, app_slot_id, &e);
+                wrb_warn!("Failed to put slot {}.{} {}: {:?}", &name, &namespace, app_slot_id, &e);
                 format!("{:?}", &e)
             })
     });
@@ -994,12 +977,14 @@ pub fn handle_wrb_contract_call_special_cases(
     args: &[Value],
     result: &Value,
 ) -> Result<(), Error> {
-    debug!(
+    wrb_debug!(
         "Run special-case handler for {}.{}",
         contract_id, function_name
     );
     if *contract_id == boot_code_id(WRB_LOW_LEVEL_CONTRACT, global_context.mainnet) {
-        let runner = Runner::new();
+        let (node_host, node_port) = with_global_config(|cfg| cfg.get_node_addr()).expect("FATAL: system not initialized");
+        let bns_contract_id = with_global_config(|cfg| cfg.get_bns_contract_id()).expect("FATAL: system not initialized");
+        let runner = Runner::new(bns_contract_id, node_host, node_port);
         let sender = match sender {
             Some(s) => s.clone(),
             None => boot_code_addr(true).into(),
@@ -1011,16 +996,6 @@ pub fn handle_wrb_contract_call_special_cases(
             .expect("FATAL: could not load wrb contract metadata");
 
         match function_name {
-            "generate-wrb-seed-phrase" => {
-                handle_generate_wrb_seed_phrase(
-                    global_context,
-                    sender,
-                    sponsor,
-                    contract_id,
-                    wrb_lowlevel_contract,
-                    runner,
-                )?;
-            }
             "call-readonly" => {
                 handle_wrb_call_readonly(
                     global_context,

@@ -15,6 +15,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+#[macro_use]
+pub mod log;
 pub mod sqlite;
 
 use clarity::vm::costs::ExecutionCost;

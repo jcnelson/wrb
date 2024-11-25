@@ -15,74 +15,67 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use crate::core::Config;
+use std::fs;
 use std::path::{Path, PathBuf};
 use stacks_common::util::secp256k1::Secp256k1PrivateKey;
 use clarity::vm::types::QualifiedContractIdentifier;
 
-use dirs;
+use serde::Serialize;
+use serde::Deserialize;
+use toml;
 
-pub const WRB_SIGNIN_HELPER: &'static str = "wrb-signin-helper";
-pub const WRB_WALLET_HELPER: &'static str = "wrb-wallet-helper";
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Config {
+    /// mainnet or testnet
+    mainnet: bool,
+    /// maximum attachment size
+    max_attachment_size: usize,
+    /// node host
+    node_host: String,
+    /// node port
+    node_port: u16,
+    /// identity key
+    private_key: Secp256k1PrivateKey,
+    /// location where we store Wrb DBs
+    /// (relative or absolute)
+    storage: String,
+    /// location of the debug file
+    debug_path: String,
+    /// Path from which we loaded this
+    #[serde(skip)]
+    __path: String,
+}
 
 // maximum size of a compressed attachment is 1MB
 pub const MAX_ATTACHMENT_SIZE: usize = 1024 * 1024;
 
 impl Config {
-    fn default_helper_programs_dir() -> String {
-        let mut wrb_dir = dirs::home_dir().expect("FATAL: could not determine home directory");
-        wrb_dir.push(".wrb");
-        wrb_dir.push("helpers");
-
-        wrb_dir
-            .to_str()
-            .expect("FATAL: could not encode home directory path as string")
-            .to_string()
-    }
-
-    fn default_signin_helper<P: AsRef<Path>>(helper_programs_dir: P) -> String {
-        let mut pb = PathBuf::new();
-        pb.push(helper_programs_dir);
-        pb.push(WRB_SIGNIN_HELPER);
-
-        pb.to_str()
-            .expect("FATAL: could not encode path to signin helper")
-            .to_string()
-    }
-
-    fn default_wallet_helper<P: AsRef<Path>>(helper_programs_dir: P) -> String {
-        let mut pb = PathBuf::new();
-        pb.push(helper_programs_dir);
-        pb.push(WRB_WALLET_HELPER);
-
-        pb.to_str()
-            .expect("FATAL: could not encode path to wallet helper")
-            .to_string()
-    }
-
     pub fn default(mainnet: bool, node_host: &str, node_port: u16) -> Config {
-        let helper_programs_dir = Config::default_helper_programs_dir();
         Config {
-            helper_programs_dir: helper_programs_dir.clone(),
-            wrb_wallet_helper: Config::default_wallet_helper(&helper_programs_dir),
-            wrb_signin_helper: Config::default_signin_helper(&helper_programs_dir),
             mainnet,
             max_attachment_size: MAX_ATTACHMENT_SIZE,
-            num_columns: 120,
             node_host: node_host.into(),
             node_port,
-            private_key: Secp256k1PrivateKey::new()
+            private_key: Secp256k1PrivateKey::new(),
+            storage: "./db".into(),
+            debug_path: "./debug.log".into(),
+            __path: "".into()
         }
     }
 
-    pub fn get_signin_helper(&self) -> &str {
-        &self.wrb_signin_helper
+    pub fn from_path(path: &str) -> Result<Config, String> {
+        let content = fs::read_to_string(path).map_err(|e| format!("Invalid path: {}", &e))?;
+        let mut c = Self::from_str(&content)?;
+        c.__path = path.into();
+        Ok(c)
     }
 
-    pub fn get_wallet_helper(&self) -> &str {
-        &self.wrb_wallet_helper
+    pub fn from_str(content: &str) -> Result<Config, String> {
+        let config: Config =
+            toml::from_str(content).map_err(|e| format!("Invalid toml: {}", e))?;
+        Ok(config)
     }
-
+        
     pub fn mainnet(&self) -> bool {
         self.mainnet
     }
@@ -101,6 +94,38 @@ impl Config {
         }
         else {
             QualifiedContractIdentifier::parse("ST000000000000000000002AMW42H.bns").unwrap()
+        }
+    }
+
+    pub fn db_path(&self) -> String {
+        if let Some('/') = self.storage.chars().next() {
+            // absolute path
+            self.storage.clone()
+        }
+        else {
+            // relative path
+            if let Some(dirname) = Path::new(&self.__path).parent() {
+                format!("{}/{}", dirname.display(), &self.storage)
+            }
+            else {
+                self.storage.clone()
+            }
+        }
+    }
+    
+    pub fn debug_path(&self) -> String {
+        if let Some('/') = self.debug_path.chars().next() {
+            // absolute path
+            self.debug_path.clone()
+        }
+        else {
+            // relative path
+            if let Some(dirname) = Path::new(&self.__path).parent() {
+                format!("{}/{}", dirname.display(), &self.debug_path)
+            }
+            else {
+                self.debug_path.clone()
+            }
         }
     }
 }

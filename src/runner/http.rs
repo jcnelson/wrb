@@ -246,7 +246,7 @@ pub fn run_http_request<S: Read + Write>(
             verb, path, host, content_length_hdr
         )
     };
-    debug!("HTTP request\n{}", &req_txt);
+    wrb_debug!("HTTP request\n{}", &req_txt);
 
     sock.write_all(req_txt.as_bytes())?;
     sock.write_all(payload)?;
@@ -258,7 +258,7 @@ pub fn run_http_request<S: Read + Write>(
     let (headers, body_offset) = decode_http_response(&buf)?;
     if body_offset >= buf.len() {
         // no body
-        debug!("No HTTP body");
+        wrb_debug!("No HTTP body");
         return Ok(vec![]);
     }
 

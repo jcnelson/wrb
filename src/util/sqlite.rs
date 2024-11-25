@@ -331,7 +331,7 @@ fn log_sql_eqp(conn: &Connection, sql_query: &str) {
 
     let path = get_db_path(conn).unwrap_or("ERROR!".to_string());
     let eqp_sql = format!("\"{}\" EXPLAIN QUERY PLAN {}", &path, full_sql.trim());
-    debug!("{}", &eqp_sql);
+    wrb_debug!("{}", &eqp_sql);
 }
 
 #[cfg(not(test))]
@@ -525,7 +525,7 @@ pub fn tx_busy_handler(run_count: i32) -> bool {
         sleep_count = 100 - jitter;
     }
 
-    debug!(
+    wrb_debug!(
         "Database is locked; sleeping {}ms and trying again",
         &sleep_count
     );

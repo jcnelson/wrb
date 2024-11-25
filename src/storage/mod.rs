@@ -17,6 +17,9 @@
 
 use std::io::{Read, Write};
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
+use std::net::SocketAddr;
+
 use stacks_common::util::secp256k1::Secp256k1PublicKey;
 use stacks_common::util::secp256k1::Secp256k1PrivateKey;
 
@@ -24,10 +27,17 @@ use stacks_common::codec::StacksMessageCodec;
 use stacks_common::codec::{write_next, read_next};
 use stacks_common::codec::Error as CodecError;
 use stacks_common::util::hash::Hash160;
+use stacks_common::util::hash::{to_hex, hex_bytes};
+use stacks_common::types::chainstate::StacksAddress;
 
 use crate::runner::Error as RuntimeError;
 
 use libstackerdb::{SlotMetadata, StackerDBChunkAckData, StackerDBChunkData};
+
+use serde;
+use serde::{Serialize, Deserialize};
+use serde::de::SeqAccess;
+use serde::ser::SerializeSeq;
 
 #[cfg(test)]
 pub mod tests;
@@ -44,11 +54,15 @@ pub const WRBPOD_MAX_SLOTS : u32 = 4096;    // same as maximum stackerdb size in
 pub const WRBPOD_CHUNK_MAX_SIZE: u32 = libstackerdb::STACKERDB_MAX_CHUNK_SIZE;
 
 /// Chunks that make up a slot in a stackerdb.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WrbpodSlices {
     /// Version of this struct
     pub version: u8,
     /// Slices
+    #[serde(
+        serialize_with = "wrbpod_slices_serialize",
+        deserialize_with = "wrbpod_slices_deserialize",
+    )]
     slices: Vec<Vec<u8>>,
     /// Slice indexes (maps clarity ID to slice index)
     index: BTreeMap<u128, usize>,
@@ -60,8 +74,50 @@ pub struct WrbpodSlices {
     max_size: u64,
 }
 
+fn wrbpod_slices_serialize<S: serde::Serializer>(
+    slices: &Vec<Vec<u8>>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    let mut seq = s.serialize_seq(Some(slices.len()))?;
+    for slice in slices {
+        let slice_hex = to_hex(&slice);
+        seq.serialize_element(slice_hex.as_str())?;
+    }
+    seq.end()
+}
+
+struct WrbpodSlicesDeserializeVisitor();
+
+impl<'de> serde::de::Visitor<'de> for WrbpodSlicesDeserializeVisitor {
+    type Value = Vec<Vec<u8>>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("WrbpodSlicesDeserialize hex string sequence")
+    }
+
+    fn visit_seq<S>(self, mut seq: S) -> Result<Self::Value, S::Error>
+    where 
+        S: SeqAccess<'de>
+    {
+        let mut slices = vec![];
+        while let Some(slice_hex) = seq.next_element::<String>()? {
+            let slice_bytes = hex_bytes(&slice_hex).map_err(serde::de::Error::custom)?;
+            slices.push(slice_bytes);
+        }
+        Ok(slices)
+    }
+}
+
+fn wrbpod_slices_deserialize<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Vec<Vec<u8>>, D::Error> {
+    let slices = d.deserialize_seq(WrbpodSlicesDeserializeVisitor())?;
+    Ok(slices)
+}
+
 /// Control state for an application.
 /// Part of the Wrb superblock
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WrbpodAppState {
     pub version: u8,
     pub code_hash: Hash160,
@@ -70,6 +126,7 @@ pub struct WrbpodAppState {
 
 /// Control structure for a wrbpod.
 /// This gets written to slot 0.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WrbpodSuperblock {
     /// version of this struct
     pub version: u8,
@@ -86,14 +143,22 @@ pub trait StackerDBClient : Send {
     ) -> Result<Vec<Option<Vec<u8>>>, RuntimeError>;
     fn get_latest_chunks(&mut self, slot_ids: &[u32]) -> Result<Vec<Option<Vec<u8>>>, RuntimeError>;
     fn put_chunk(&mut self, chunk: StackerDBChunkData) -> Result<StackerDBChunkAckData, RuntimeError>;
+    fn find_replicas(&mut self) -> Result<Vec<SocketAddr>, RuntimeError>;
+    fn get_signers(&mut self) -> Result<Vec<StacksAddress>, RuntimeError>;
 }
 
 /// Instantiated handle to a Wrbpod
 pub struct Wrbpod {
     /// top-level control structure
     superblock: WrbpodSuperblock,
-    client: Box<dyn StackerDBClient>,
+    /// connection to a node with a replica
+    replica_client: Box<dyn StackerDBClient>,
+    /// connection to the home node
+    home_client: Box<dyn StackerDBClient>,
+    /// signing key
     privkey: Secp256k1PrivateKey,
+    /// cached copy of the signers in the DB
+    signers: Option<Vec<StacksAddress>>,
     /// Maps stackerdb slot ID to slices
     chunks: HashMap<u32, WrbpodSlices>,
 }

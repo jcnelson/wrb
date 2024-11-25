@@ -42,7 +42,7 @@ pub enum Scanline {
 
 impl Scanline {
     /// Translate a charbuff into a sequence of scanline directives
-    pub fn compile(buff: &CharBuff) -> Vec<Scanline> {
+    pub fn compile_rows(buff: &CharBuff, start_row: u64, num_rows: u64) -> Vec<Scanline> {
         let mut cmds = vec![];
         let mut cur_fg_color: Option<Color> = None;
         let mut cur_bg_color: Option<Color> = None;
@@ -65,8 +65,10 @@ impl Scanline {
                 // next line
                 if i > 0 {
                     cmds.push(Self::Newline);
+                    cmds.push(Self::ResetColor);
                 }
                 cmds.push(Self::ClearLine);
+
                 // carry over colors
                 if let Some(fg) = cur_fg_color.as_ref() {
                     cmds.push(Self::FgColor(fg.clone()));
@@ -86,7 +88,7 @@ impl Scanline {
                     cur_fg_color = None;
                     cur_bg_color = None;
                 }
-                CharCell::Fill { fg, bg, value } => {
+                CharCell::Fill { element_id: _element_id, fg, bg, value } => {
                     if in_blank {
                         finish_string(&mut cur_str, &mut cmds);
                         in_blank = false;
@@ -127,7 +129,23 @@ impl Scanline {
         }
         finish_string(&mut cur_str, &mut cmds);
         cmds.push(Self::ResetColor);
-        cmds
+
+        let mut in_range = Vec::with_capacity(cmds.len());
+        let mut row_num = 0;
+        for cmd in cmds.into_iter() {
+            let nl = matches!(cmd, Scanline::Newline);
+            if start_row <= row_num && row_num < start_row + num_rows {
+                in_range.push(cmd);
+            }
+            if nl {
+                row_num += 1;
+            }
+        }
+        in_range
+    }
+
+    pub fn compile(buff: &CharBuff) -> Vec<Scanline> {
+        Self::compile_rows(buff, 0, u64::MAX)
     }
 
     /// Translate a scanline command into its terminal control code string

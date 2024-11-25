@@ -42,10 +42,15 @@ use stacks_common::codec::StacksMessageCodec;
 use stacks_common::util::hash::Hash160;
 use stacks_common::util::hash::Sha512Trunc256Sum;
 use stacks_common::types::chainstate::StacksPublicKey;
+use stacks_common::types::chainstate::StacksAddress;
 
 use libstackerdb::StackerDBChunkData;
+use libstackerdb::SlotMetadata;
 
 pub const WRBPOD_SLICES_INITIAL_SIZE: u64 = 1 + 8; // version + index_length
+
+pub const SIGNER_REFRESH_INTERVAL: u64 = 60;        // refresh once every 60 seconds
+
 impl WrbpodSlices {
     pub fn new() -> Self {
         Self {
@@ -166,7 +171,7 @@ impl WrbpodSuperblock {
         for _i in 0..num_slots {
             let Some(free_slot) = self.find_free_slot(&slots) else {
                 // not enough space
-                test_debug!("Not enough free space to allocate {} slots for {} ({})", num_slots, app_name, &code_hash);
+                wrb_test_debug!("Not enough free space to allocate {} slots for {} ({})", num_slots, app_name, &code_hash);
                 return false;
             };
             slots.push(free_slot);
@@ -179,13 +184,13 @@ impl WrbpodSuperblock {
                 slots
             };
             self.apps.insert(app_name.to_string(), new_app_state);
-            test_debug!("Added {} more slots for existing app state for {} ({})", num_slots, app_name, &code_hash);
+            wrb_test_debug!("Added {} more slots for existing app state for {} ({})", num_slots, app_name, &code_hash);
             return true;
         };
 
         // add slots
         app_state.slots.append(&mut slots);
-        test_debug!("Instantiated {} slots for new app state for {} ({})", num_slots, app_name, &code_hash);
+        wrb_test_debug!("Instantiated {} slots for new app state for {} ({})", num_slots, app_name, &code_hash);
         return true;
     }
 
@@ -223,29 +228,84 @@ impl WrbpodSuperblock {
 }
 
 impl Wrbpod {
-    pub fn open(client: Box<dyn StackerDBClient>, privkey: Secp256k1PrivateKey) -> Result<Self, Error> {
+    /// open an existing wrbpod
+    pub fn open(home_client: Box<dyn StackerDBClient>, replica_client: Box<dyn StackerDBClient>, privkey: Secp256k1PrivateKey) -> Result<Self, Error> {
         let mut wrbpod = Wrbpod {
             superblock: WrbpodSuperblock::new(),
             privkey,
-            client,
+            home_client,
+            replica_client,
             chunks: HashMap::new(),
+            signers: None,
         };
+        wrbpod.refresh_signers()?;
         wrbpod.download_superblock()?;
         Ok(wrbpod)
     }
+   
+    /// create a new wrbpod with an empty superblock
+    pub fn format(home_client: Box<dyn StackerDBClient>, replica_client: Box<dyn StackerDBClient>, privkey: Secp256k1PrivateKey) -> Result<Self, Error> {
+        let mut wrbpod = Wrbpod {
+            superblock: WrbpodSuperblock::new(),
+            privkey,
+            home_client,
+            replica_client,
+            chunks: HashMap::new(),
+            signers: None,
+        };
+        wrbpod.refresh_signers()?;
+        wrbpod.upload_superblock()?;
+        Ok(wrbpod)
+    }
 
-    /// Update the superblock
+    /// Update the list of signers.
+    /// We ask the *home client* for this, since it's trusted.
+    fn refresh_signers(&mut self) -> Result<(), Error> {
+        let signers = self.home_client.get_signers()?;
+        self.signers = Some(signers);
+        Ok(())
+    }
+
+    /// Update the cached copy of the superblock
     fn download_superblock(&mut self) -> Result<(), Error> {
-        // chunk 0 is the superblock chunk
-        let superblock = self.client.get_latest_chunks(&[WRBPOD_SUPERBLOCK_SLOT_ID])?
-            .pop()
-            .ok_or(Error::GetChunk("Failed to get superblock chunk".into()))?
-            .map(|chunk_bytes| {
-                WrbpodSuperblock::consensus_deserialize(&mut &chunk_bytes[..]).ok()
-            })
-            .flatten()
-            .unwrap_or(WrbpodSuperblock::new());
+        let all_slot_metadata = self.replica_client.list_chunks()?;
+        let slot_md = all_slot_metadata.get(0).ok_or(Error::GetChunk("no superblock chunk defined in slot metadata".into()))?;
 
+        if self.signers.is_none() {
+            self.refresh_signers()?;
+        }
+
+        let Some(signers) = self.signers.as_ref() else {
+            return Err(Error::GetChunk("Unable to load signer list".into()));
+        };
+        let Some(signer_addr) = signers.get(0).cloned() else {
+            return Err(Error::GetChunk(format!("No such signer for chunk ID {}", 0)));
+        };
+        
+        if slot_md.slot_version == 0 && slot_md.data_hash == Sha512Trunc256Sum([0x00; 32]) {
+            // no superblock instantiated yet
+            self.superblock = WrbpodSuperblock::new();
+            return Ok(());
+        }
+
+        if !slot_md.verify(&signer_addr).map_err(|e| Error::GetChunk(format!("Failed to verify signature by {} on {:?}: {:?}", &signer_addr, &slot_md, &e)))? {
+            wrb_warn!("Superblock slot is not signed by signer; signer_addr = {}, metadata = {:?}", &signer_addr, &slot_md);
+            return Err(Error::GetChunk("Invalid superblock signature".into()));
+        }
+        
+        // get the superblock chunk
+        let chunks = self.replica_client.get_latest_chunks(&[0])?;
+        let Some(chunk_opt) = chunks.get(0) else {
+            return Err(Error::NoSuchChunk);
+        };
+        let Some(chunk) = chunk_opt else {
+            return Err(Error::NoSuchChunk);
+        };
+        if slot_md.data_hash != Sha512Trunc256Sum::from_data(&chunk) {
+            return Err(Error::GetChunk("superblock chunk hash mismatch".into()));
+        }
+
+        let superblock = WrbpodSuperblock::consensus_deserialize(&mut &chunk[..])?;
         self.superblock = superblock;
         Ok(())
     }
@@ -253,31 +313,38 @@ impl Wrbpod {
     /// Save the superblock.
     /// Retries on stale version.
     fn upload_superblock(&mut self) -> Result<(), Error> {
-        let slot_metadata = self.client.list_chunks()?;
+        let slot_metadata = self.replica_client.list_chunks()?;
         let superblock_md = slot_metadata.get(WRBPOD_SUPERBLOCK_SLOT_ID as usize).ok_or(Error::PutChunk("No superblock chunk defined in slot metadata".into()))?;
         let superblock_bytes = self.superblock.serialize_to_vec();
         let mut slot_version = superblock_md.slot_version;
         loop {
             let mut superblock_chunk = StackerDBChunkData::new(WRBPOD_SUPERBLOCK_SLOT_ID, slot_version, superblock_bytes.clone());
             superblock_chunk.sign(&self.privkey).map_err(|_| Error::Codec(CodecError::SerializeError("Failed to sign".into())))?;
+            
+            wrb_test_debug!("Signed superblock with {} ({}): {:?}", &self.privkey.to_hex(), StacksAddress::p2pkh(true, &StacksPublicKey::from_private(&self.privkey)), &superblock_chunk);
 
-            let result = self.client.put_chunk(superblock_chunk)?;
+            let result = self.replica_client.put_chunk(superblock_chunk)?;
             if result.accepted {
                 break;
             }
 
             let reason = result.reason.unwrap_or("(reason not given)".to_string());
-            warn!("Failed to save superblock: reason was '{}'", &reason);
+            wrb_warn!("Failed to save superblock: reason was '{}'", &reason);
 
             if let Some(metadata) = result.metadata {
                 // newer version
-                slot_version = metadata.slot_version;
+                slot_version = metadata.slot_version + 1;
                 continue;
             }
 
             return Err(Error::PutChunk(reason));
         }
         Ok(())
+    }
+
+    /// Get a ref to the superblock
+    pub fn superblock(&self) -> &WrbpodSuperblock {
+        &self.superblock
     }
 
     /// Allocate slots in the superblock for an app.
@@ -289,7 +356,6 @@ impl Wrbpod {
         self.download_superblock()?;
         let success = self.superblock.allocate_slots(app_name, code_hash, num_slots);
         if success {
-
             self.upload_superblock()?;
         }
         Ok(success)
@@ -310,22 +376,23 @@ impl Wrbpod {
         Ok(())
     }
 
-    /// Save a chunk
-    fn put_chunk(&mut self, mut chunk: StackerDBChunkData) -> Result<(), Error> {
+    /// Save a chunk directly.  Used for low-level things, like manually patching the wrbpod.
+    pub(crate) fn put_chunk(&mut self, mut chunk: StackerDBChunkData) -> Result<(), Error> {
         loop {
             chunk.sign(&self.privkey).map_err(|_| Error::Codec(CodecError::SerializeError("Failed to sign".into())))?;
+            wrb_test_debug!("Signed with {} ({}): {:?}", &self.privkey.to_hex(), StacksAddress::p2pkh(true, &StacksPublicKey::from_private(&self.privkey)), &chunk);
 
-            let result = self.client.put_chunk(chunk.clone())?;
+            let result = self.replica_client.put_chunk(chunk.clone())?;
             if result.accepted {
                 break;
             }
 
             let reason = result.reason.unwrap_or("(reason not given)".to_string());
-            warn!("Failed to save chunk ({},{}): reason was '{}'", chunk.slot_id, chunk.slot_version, &reason);
+            wrb_warn!("Failed to save chunk ({},{}): reason was '{}'", chunk.slot_id, chunk.slot_version, &reason);
 
             if let Some(metadata) = result.metadata {
                 // newer version
-                chunk.slot_version = metadata.slot_version;
+                chunk.slot_version = metadata.slot_version + 1;
                 continue;
             }
 
@@ -334,26 +401,93 @@ impl Wrbpod {
         Ok(())
     }
 
-    /// Get a chunk (a bundle of slices).
+    /// List all chunks in the StackerDB.  Used for low-level things like manually patchin the
+    /// wrbpod.
+    pub(crate) fn list_chunks(&mut self) -> Result<Vec<SlotMetadata>, Error> {
+        Ok(self.replica_client.list_chunks()?)
+    }
+    
+    /// Get a raw chunk.
     /// `slot_id` is a StackerDB chunk ID.
+    /// The signature of the chunk will *not* be checked; use `fetch_chunk` for that.
     /// Returns true if we got chunk data
     /// Returns false if there is no chunk data 
     /// Returns an error on network errors or codec errors.
     /// In particular, NoSuchChunk means that the node reported that this chunk doesn't exist yet.
-    fn get_chunk(&mut self, slot_id: u32, data_hash: &Sha512Trunc256Sum) -> Result<(), Error> {
-        let chunks = self.client.get_latest_chunks(&[slot_id])?;
+    pub fn get_raw_chunk(&mut self, slot_id: u32, data_hash: &Sha512Trunc256Sum) -> Result<Vec<u8>, Error> {
+        let chunks = self.replica_client.get_latest_chunks(&[slot_id])?;
         let Some(chunk_opt) = chunks.get(0) else {
+            wrb_debug!("No such StackerDB chunk {}", slot_id);
             return Err(Error::NoSuchChunk);
         };
         let Some(chunk) = chunk_opt else {
+            wrb_debug!("No data for StackerDB chunk {}", slot_id);
             return Err(Error::NoSuchChunk);
         };
         if data_hash != &Sha512Trunc256Sum::from_data(&chunk) {
             return Err(Error::GetChunk("chunk hash mismatch".into()));
         }
+        Ok(chunk.clone())
+    }
+    
+    /// Get and authenticate raw chunk.
+    /// `slot_id` is a StackerDB chunk ID.
+    /// Returns true if we got chunk data
+    /// Returns false if there is no chunk data 
+    /// Returns an error on network errors or codec errors.
+    /// In particular, NoSuchChunk means that the node reported that this chunk doesn't exist yet.
+    pub fn get_and_verify_raw_chunk(&mut self, slot_id: u32) -> Result<Option<Vec<u8>>, Error> {
+        if self.signers.is_none() {
+            self.refresh_signers()?;
+        }
+        let Some(signers) = self.signers.as_ref() else {
+            return Err(Error::GetChunk("Unable to load signer list".into()));
+        };
+        let Some(signer_addr) = signers.get(slot_id as usize).cloned() else {
+            return Err(Error::GetChunk(format!("No such signer for chunk ID {}", slot_id)));
+        };
+        let all_slot_metadata = self.replica_client.list_chunks()?;
+        let slot_md = all_slot_metadata.get(slot_id as usize).ok_or(Error::GetChunk("no app chunk defined in slot metadata".into()))?;
+        if slot_md.slot_version == 0 && slot_md.data_hash == Sha512Trunc256Sum([0x00; 32]) {
+            // no chunk at all
+            return Ok(None);
+        }
+        if !slot_md.verify(&signer_addr).map_err(|e| Error::GetChunk(format!("Failed to verify signature on {:?}: {:?}", &slot_md, &e)))? {
+            wrb_warn!("Slot not signed by signer; signer_addr = {}, metadata = {:?}", &signer_addr, &slot_md);
+            return Err(Error::GetChunk("Invalid chunk signature".into()));
+        }
+
+        // hash is authentic
+        let chunk = self.get_raw_chunk(slot_id, &slot_md.data_hash)?;
+        Ok(Some(chunk))
+    }
+
+    /// Get a chunk (a bundle of slices) and cache it locally.
+    /// `slot_id` is a StackerDB chunk ID.
+    /// The signature of the chunk will *not* be checked; use `fetch_chunk` for that.
+    /// Returns true if we got chunk data
+    /// Returns false if there is no chunk data 
+    /// Returns an error on network errors or codec errors.
+    /// In particular, NoSuchChunk means that the node reported that this chunk doesn't exist yet.
+    pub fn get_chunk(&mut self, slot_id: u32, data_hash: &Sha512Trunc256Sum) -> Result<(), Error> {
+        let chunk = self.get_raw_chunk(slot_id, data_hash)?;
         let slices = WrbpodSlices::from_slice(&chunk)?;
         self.chunks.insert(slot_id, slices);
         Ok(())
+    }
+
+    /// Get a reference to a downloaded chunk
+    /// The slot_id is a StackerDB slot ID
+    pub fn ref_chunk(&self, slot_id: u32) -> Option<&WrbpodSlices> {
+        self.chunks.get(&slot_id)
+    }
+    
+    /// Get a reference to a downloaded chunk, addressed by app
+    pub fn ref_app_chunk(&self, app_name: &str, app_slot_id: u32) -> Option<&WrbpodSlices> {
+        let Some(slot_id) = self.app_slot_id_to_stackerdb_chunk_id(app_name, app_slot_id) else {
+            return None;
+        };
+        self.chunks.get(&slot_id)
     }
     
     /// Get the digest to sign that authenticates this chunk data and metadata
@@ -365,22 +499,62 @@ impl Wrbpod {
         Sha512Trunc256Sum::from_data(&data)
     }
 
+    /// Convert an app slot ID to a stackerdb slot ID
+    pub fn app_slot_id_to_stackerdb_chunk_id(&self, app_name: &str, app_slot_id: u32) -> Option<u32> {
+        let Some(chunk_id) = self.superblock.app_slot_id_to_stackerdb_chunk_id(app_name, app_slot_id) else {
+            return None;
+        };
+        Some(chunk_id)
+    }
+
     /// Fetch a chunk for an app, and cache it locally.
     /// Returns the chunk version and signer public key.
-    pub fn fetch_chunk(&mut self, app_name: &str, app_slot_id: u32) -> Result<(u32, StacksPublicKey), Error> {
-        let Some(chunk_id) = self.superblock.app_slot_id_to_stackerdb_chunk_id(app_name, app_slot_id) else {
-            return Err(Error::GetChunk("no such app chunk".into()));
-        };
-        let all_slot_metadata = self.client.list_chunks()?;
-        let slot_md = all_slot_metadata.get(chunk_id as usize).ok_or(Error::GetChunk("no app chunk defined in slot metadata".into()))?;
+    pub fn fetch_chunk(&mut self, app_name: &str, app_slot_id: u32) -> Result<(u32, Option<StacksPublicKey>), Error> {
+        let mut refreshed_signers = false;
+        loop {
+            let Some(chunk_id) = self.superblock.app_slot_id_to_stackerdb_chunk_id(app_name, app_slot_id) else {
+                return Err(Error::GetChunk("no such app chunk".into()));
+            };
+            let all_slot_metadata = self.replica_client.list_chunks()?;
+            let slot_md = all_slot_metadata.get(chunk_id as usize).ok_or(Error::GetChunk("no app chunk defined in slot metadata".into()))?;
+           
+            if self.signers.is_none() {
+                self.refresh_signers()?;
+                refreshed_signers = true;
+            }
+            let Some(signers) = self.signers.as_ref() else {
+                return Err(Error::GetChunk("Unable to load signer list".into()));
+            };
+            let Some(signer_addr) = signers.get(chunk_id as usize).cloned() else {
+                return Err(Error::GetChunk(format!("No such signer for chunk ID {}", chunk_id)));
+            };
+            
+            if slot_md.slot_version == 0 && slot_md.data_hash == Sha512Trunc256Sum([0x00; 32]) {
+                // this slot is empty, so pass a null signer
+                return Ok((0, None))
+            }
 
-        self.get_chunk(chunk_id, &slot_md.data_hash)?;
+            if !slot_md.verify(&signer_addr).map_err(|e| Error::GetChunk(format!("Failed to verify signature on {:?}: {:?}", &slot_md, &e)))? {
+                if !refreshed_signers {
+                    // try again after refreshing the signers
+                    self.refresh_signers()?;
+                    refreshed_signers = true;
+                    continue;
+                }
+                
+                // already refreshed signers
+                wrb_warn!("Slot not signed by signer; signer_addr = {}, metadata = {:?}", &signer_addr, &slot_md);
+                return Err(Error::GetChunk("Invalid chunk signature".into()));
+            }
 
-        let sigh = Self::chunk_auth_digest(chunk_id, slot_md.slot_version, &slot_md.data_hash);
-        let pubk = StacksPublicKey::recover_to_pubkey(sigh.as_bytes(), &slot_md.signature)
-            .map_err(|_| Error::GetChunk("failed to recover public key".into()))?;
-        
-        Ok((slot_md.slot_version, pubk))
+            self.get_chunk(chunk_id, &slot_md.data_hash)?;
+
+            let sigh = Self::chunk_auth_digest(chunk_id, slot_md.slot_version, &slot_md.data_hash);
+            let pubk = StacksPublicKey::recover_to_pubkey(sigh.as_bytes(), &slot_md.signature)
+                .map_err(|_| Error::GetChunk("failed to recover public key".into()))?;
+            
+            return Ok((slot_md.slot_version, Some(pubk)));
+        }
     }
 
     /// Get a slice, given the StackerDB chunk ID and the slice ID
@@ -436,11 +610,11 @@ impl Wrbpod {
             return Err(Error::NoSuchChunk);
         };
 
-        let slot_metadata = self.client.list_chunks()?;
+        let slot_metadata = self.replica_client.list_chunks()?;
         let chunk_id_usize = usize::try_from(chunk_id).map_err(|_| Error::Overflow("could not convert slot ID to usize".into()))?;
 
         let Some(slot_md) = slot_metadata.get(chunk_id_usize) else {
-            warn!("Could not save chunk {}: no longer in slot metadata", &chunk_id);
+            wrb_warn!("Could not save chunk {}: no longer in slot metadata", &chunk_id);
             return Err(Error::NoSuchChunk);
         };
         let chunk = slices.to_stackerdb_chunk(chunk_id, slot_md.slot_version + 1);

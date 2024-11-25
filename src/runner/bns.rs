@@ -27,8 +27,6 @@ use crate::core::Config;
 use crate::runner::Error;
 use crate::runner::Runner;
 
-use crate::core::with_globals;
-
 use clarity::vm::types::BufferLength;
 use clarity::vm::types::PrincipalData;
 use clarity::vm::types::ResponseData;
@@ -37,8 +35,6 @@ use clarity::vm::types::SequenceData;
 use clarity::vm::types::Value;
 
 use stacks_common::util::hash::Hash160;
-
-use crate::core::with_global_config;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct BNSNameRecord {
@@ -144,9 +140,7 @@ impl TryFrom<ResponseData> for BNSError {
 impl Runner {
     /// Look up a BNS name
     pub fn bns_lookup(&mut self, namespace: &str, name: &str) -> Result<Result<BNSNameRecord, BNSError>, Error> {
-        let bns_contract = with_global_config(|cfg| cfg.get_bns_contract_id())
-            .ok_or(Error::NotInitialized)?;
-
+        let bns_contract = self.bns_contract_id.clone();
         let v = self.call_readonly(&bns_contract, "name-resolve", &[Value::string_ascii_from_bytes(namespace.as_bytes().to_vec())?, Value::string_ascii_from_bytes(name.as_bytes().to_vec())?])?;
         let Value::Response(v_res) = v else {
             return Err(Error::Deserialize("Expected response".into()));

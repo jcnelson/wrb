@@ -118,7 +118,7 @@ fn test_wrbpod_slots() {
     )
         (asserts! (is-eq wrbpod-session-id u1) (err { msg: "Did not open", val: wrbpod-session-id }))
         (asserts! (is-eq num-slots u1) (err { msg: "Wrong number of slots", val: num-slots }))
-        (asserts! (is-eq slot-md { version: u0, signer: 0x000000000000000000000000000000000000000000000000000000000000000000 }) (err { msg: "wrong md", val: (get version slot-md) }))
+        (asserts! (is-eq slot-md { version: u0, signer: none }) (err { msg: "wrong md", val: (get version slot-md) }))
     )
 
     (let (

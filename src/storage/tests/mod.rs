@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::net::SocketAddr;
 
 use crate::storage::StackerDBClient;
 use crate::storage::WrbpodSlices;
@@ -29,6 +30,8 @@ use crate::vm::ClarityVM;
 
 use stacks_common::util::hash::Sha512Trunc256Sum;
 use stacks_common::types::chainstate::StacksPrivateKey;
+use stacks_common::types::chainstate::StacksAddress;
+use stacks_common::types::chainstate::StacksPublicKey;
 
 use libstackerdb::{SlotMetadata, StackerDBChunkAckData, StackerDBChunkData};
 
@@ -39,6 +42,7 @@ use crate::runner::Runner;
 mod wrbpod;
 
 pub struct MockStackerDBClient {
+    pub privkey: StacksPrivateKey,
     pub num_slots: u32,
     pub mock_failure: Option<RuntimeError>,
     pub mock_ack_failure: Option<StackerDBChunkAckData>,
@@ -46,8 +50,9 @@ pub struct MockStackerDBClient {
 }
 
 impl MockStackerDBClient {
-    pub fn new(num_slots: u32) -> Self {
+    pub fn new(privk: StacksPrivateKey, num_slots: u32) -> Self {
         Self {
+            privkey: privk,
             num_slots,
             mock_failure: None,
             mock_ack_failure: None,
@@ -71,7 +76,7 @@ impl StackerDBClient for MockStackerDBClient {
                 metadata.push(SlotMetadata::new_unsigned(slot_id, 0, Sha512Trunc256Sum([0x00; 32])));
             }
         }
-        test_debug!("list_chunks: {:?}", &metadata);
+        wrb_test_debug!("list_chunks: {:?}", &metadata);
         Ok(metadata)
     }
 
@@ -94,7 +99,7 @@ impl StackerDBClient for MockStackerDBClient {
                 ret.push(None);
             }
         }
-        test_debug!("get_chunks({:?}): {:?}", slots_and_versions, &ret);
+        wrb_test_debug!("get_chunks({:?}): {:?}", slots_and_versions, &ret);
         Ok(ret)
     }
 
@@ -112,7 +117,7 @@ impl StackerDBClient for MockStackerDBClient {
                 ret.push(None);
             }
         }
-        test_debug!("get_latest_chunks({:?}): {:?}", slot_ids, &ret);
+        wrb_test_debug!("get_latest_chunks({:?}): {:?}", slot_ids, &ret);
         Ok(ret)
     }
 
@@ -125,15 +130,28 @@ impl StackerDBClient for MockStackerDBClient {
         }
         self.chunks.insert(chunk.slot_id, chunk.clone());
         
-        let ret = StackerDBChunkAckData { accepted: true, reason: None, metadata: None };
-        test_debug!("put_chunk({:?}): {:?}", &chunk, &ret);
+        let ret = StackerDBChunkAckData { accepted: true, reason: None, metadata: None, code: None };
+        wrb_test_debug!("put_chunk({:?}): {:?}", &chunk, &ret);
         Ok(ret)
+    }
+    
+    fn find_replicas(&mut self) -> Result<Vec<SocketAddr>, RuntimeError> {
+        if let Some(error) = self.mock_failure.as_ref() {
+            return Err(error.clone());
+        }
+        return Ok(vec![SocketAddr::from(([127, 0, 0, 1], 20443))]);
+    }
+
+    fn get_signers(&mut self) -> Result<Vec<StacksAddress>, RuntimeError> {
+        let mut pubkey = StacksPublicKey::from_private(&self.privkey);
+        pubkey.set_compressed(true);
+        return Ok(vec![StacksAddress::p2pkh(true, &pubkey); 16])
     }
 }
 
 #[test]
 fn test_mock_stackerdb() {
-    let mut mock_stackerdb = MockStackerDBClient::new(3);
+    let mut mock_stackerdb = MockStackerDBClient::new(StacksPrivateKey::new(), 3);
     assert_eq!(mock_stackerdb.list_chunks().unwrap(),
         vec![
             SlotMetadata::new_unsigned(0, 0, Sha512Trunc256Sum([0x00; 32])),
@@ -160,7 +178,7 @@ fn test_mock_stackerdb() {
     let mut chunk = StackerDBChunkData::new(0, 0, vec![1,2,3,4,5]);
     chunk.sign(&privk).unwrap();
 
-    assert_eq!(mock_stackerdb.put_chunk(chunk.clone()).unwrap(), StackerDBChunkAckData { accepted: true, reason: None, metadata: None });
+    assert_eq!(mock_stackerdb.put_chunk(chunk.clone()).unwrap(), StackerDBChunkAckData { accepted: true, reason: None, metadata: None, code: None });
     
     assert_eq!(mock_stackerdb.list_chunks().unwrap(),
         vec![
@@ -251,5 +269,19 @@ fn test_wrbpod_slices() {
     parsed_slices.set_dirty(true);
 
     assert_eq!(parsed_slices, slices);
+}
+
+#[test]
+fn test_wrbpod_slices_serde() {
+    let mut slices = WrbpodSlices::new();
+    slices.put_slice(10, "hello slice 0".as_bytes().to_vec());
+    slices.put_slice(11, "hello slice 1".as_bytes().to_vec());
+    slices.put_slice(12, "hello slice 2".as_bytes().to_vec());
+
+    let slices_json = serde_json::to_string(&slices).unwrap();
+    eprintln!("{:?}", slices_json);
+
+    let serde_slices : WrbpodSlices = serde_json::from_str(&slices_json).unwrap();
+    assert_eq!(serde_slices, slices);
 }
 

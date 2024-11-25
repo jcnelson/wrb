@@ -23,17 +23,20 @@ use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::net::ToSocketAddrs;
 
-use crate::core::Config;
-use crate::core::with_global_config;
-
 use crate::runner::http::run_http_request;
 
 use clarity::vm::types::QualifiedContractIdentifier;
 use clarity::vm::types::StandardPrincipalData;
 use clarity::vm::Value;
+use clarity::vm::types::PrincipalData;
 
+use stacks_common::types::StacksPublicKeyBuffer;
 use stacks_common::types::chainstate::StacksAddress;
-use stacks_common::util::hash::{hex_bytes, Hash160};
+use stacks_common::types::chainstate::StacksPrivateKey;
+use stacks_common::types::chainstate::StacksPublicKey;
+use stacks_common::types::chainstate::{BlockHeaderHash, ConsensusHash, StacksBlockId};
+use stacks_common::types::net::PeerAddress;
+use stacks_common::util::hash::{hex_bytes, Hash160, Sha256Sum};
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -48,6 +51,50 @@ pub mod stackerdb;
 
 #[cfg(test)]
 pub mod tests;
+
+const STACKERDB_SLOTS_FUNCTION: &str = "stackerdb-get-signer-slots";
+const STACKERDB_INV_MAX: u32 = 4096;
+
+/// A descriptor of a peer
+/// Cribbed from the Stacks blockchain (https://github.com/stacks-network/stacks-core)
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct NeighborAddress {
+    #[serde(rename = "ip")]
+    pub addrbytes: PeerAddress,
+    pub port: u16,
+    pub public_key_hash: Hash160, // used as a hint; useful for when a node trusts another node to be honest about this
+}
+
+/// The response to GET /v2/info, omitting things like the anchor block and affirmation maps (since
+/// we don't have the structs for them available in stacks_common).
+/// Cribbed from the Stacks blockchain (https://github.com/stacks-network/stacks-core)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RPCPeerInfoData {
+    pub peer_version: u32,
+    pub pox_consensus: ConsensusHash,
+    pub burn_block_height: u64,
+    pub stable_pox_consensus: ConsensusHash,
+    pub stable_burn_block_height: u64,
+    pub server_version: String,
+    pub network_id: u32,
+    pub parent_network_id: u32,
+    pub stacks_tip_height: u64,
+    pub stacks_tip: BlockHeaderHash,
+    pub stacks_tip_consensus_hash: ConsensusHash,
+    pub genesis_chainstate_hash: Sha256Sum,
+    pub unanchored_tip: Option<StacksBlockId>,
+    pub unanchored_seq: Option<u16>,
+    pub exit_at_block_height: Option<u64>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_public_key: Option<StacksPublicKeyBuffer>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_public_key_hash: Option<Hash160>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stackerdbs: Option<Vec<String>>,
+}
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -132,6 +179,9 @@ impl From<clarity_interpreter_error> for Error {
 }
 
 pub struct Runner {
+    bns_contract_id: QualifiedContractIdentifier,
+    node_host: String,
+    node_port: u16,
     node: Option<SocketAddr>,
 }
 
@@ -156,26 +206,21 @@ pub struct CallReadOnlyResponse {
 
 impl Runner {
     pub fn resolve_node(&mut self) -> Result<Option<SocketAddr>, Error> {
-        let (node_host, node_port) = with_global_config(|cfg| cfg.get_node_addr())
-            .ok_or(Error::NotInitialized)?;
         if self.node.is_none() {
-            let mut addrs: Vec<_> = (node_host.as_str(), node_port).to_socket_addrs()?.collect();
+            let mut addrs: Vec<_> = (self.node_host.as_str(), self.node_port).to_socket_addrs()?.collect();
             return Ok(addrs.pop());
         }
         Ok(self.node.clone())
     }
-
-    /// Run a read-only function call on the node
-    pub fn call_readonly(
-        &mut self,
+    
+    /// Run a read-only function call on the node, given a resolved socket address to the node
+    pub fn run_call_readonly(
+        node_addr: &SocketAddr,
         contract_id: &QualifiedContractIdentifier,
         function_name: &str,
         function_args: &[Value],
     ) -> Result<Value, Error> {
-        let Some(node_addr) = self.resolve_node()? else {
-            return Err(Error::NotConnected);
-        };
-        let mut sock = TcpStream::connect(&node_addr)?;
+        let mut sock = TcpStream::connect(node_addr)?;
 
         let mut arguments = vec![];
         for arg in function_args.iter() {
@@ -192,7 +237,7 @@ impl Runner {
             .map_err(|_| Error::RPCError("Could not serialize call-read-only request".into()))?;
         let bytes = run_http_request(
             &mut sock,
-            &node_addr,
+            node_addr,
             "POST",
             &format!(
                 "/v2/contracts/call-read/{}/{}/{}",
@@ -202,7 +247,7 @@ impl Runner {
             payload_json.as_bytes(),
         )?;
 
-        debug!("call-readonly: {}", &payload_json);
+        wrb_debug!("call-readonly: {}", &payload_json);
 
         // try to convert into the response
         let response: CallReadOnlyResponse = serde_json::from_slice(&bytes).map_err(|_| {
@@ -232,15 +277,25 @@ impl Runner {
         Ok(value)
     }
 
-    /// Get an attachment from Atlas
-    pub fn get_attachment(&mut self, attachment_hash: &Hash160) -> Result<Vec<u8>, Error> {
+    /// Run a read-only function call on the node, using the resolved node.
+    pub fn call_readonly(
+        &mut self,
+        contract_id: &QualifiedContractIdentifier,
+        function_name: &str,
+        function_args: &[Value],
+    ) -> Result<Value, Error> {
         let Some(node_addr) = self.resolve_node()? else {
             return Err(Error::NotConnected);
         };
-        let mut sock = TcpStream::connect(&node_addr)?;
+        Self::run_call_readonly(&node_addr, contract_id, function_name, function_args)
+    }
+    
+    /// Get an attachment from Atlas, given a resolved node
+    pub fn run_get_attachment(node_addr: &SocketAddr, attachment_hash: &Hash160) -> Result<Vec<u8>, Error> {
+        let mut sock = TcpStream::connect(node_addr)?;
         let bytes = run_http_request(
             &mut sock,
-            &node_addr,
+            node_addr,
             "GET",
             &format!("/v2/attachments/{}", attachment_hash),
             None,
@@ -253,5 +308,210 @@ impl Runner {
             Error::Deserialize("Failed to decode attachment: not a hex string".into())
         })?;
         Ok(response)
+    }
+
+    /// Get an attachment from Atlas
+    pub fn get_attachment(&mut self, attachment_hash: &Hash160) -> Result<Vec<u8>, Error> {
+        let Some(node_addr) = self.resolve_node()? else {
+            return Err(Error::NotConnected);
+        };
+        Self::run_get_attachment(&node_addr, attachment_hash)
+    }
+
+    /// Get /v2/info
+    pub fn run_get_info(node_addr: &SocketAddr) -> Result<RPCPeerInfoData, Error> {
+        let mut sock = TcpStream::connect(node_addr)?;
+        let bytes = run_http_request(
+            &mut sock,
+            node_addr,
+            "GET",
+            "/v2/info",
+            None,
+            &[],
+        )?;
+        
+        let response: RPCPeerInfoData = serde_json::from_slice(&bytes)
+            .map_err(|_| Error::Deserialize("Failed to decode /v2/info response".into()))?;
+
+        Ok(response)
+    }
+    
+    /// Get a list of hosts that replicate a particular StackerDB
+    pub fn run_get_stackerdb_replicas(node_addr: &SocketAddr, contract_id: &QualifiedContractIdentifier) -> Result<Vec<SocketAddr>, Error> {
+        let mut sock = TcpStream::connect(node_addr)?;
+        let stacks_address = StacksAddress {
+            version: contract_id.issuer.0,
+            bytes: Hash160(contract_id.issuer.1.clone()),
+        };
+        let bytes = run_http_request(
+            &mut sock,
+            node_addr,
+            "GET",
+            &format!("/v2/stackerdb/{}/{}/replicas", &stacks_address, &contract_id.name),
+            None,
+            &[],
+        )?;
+
+        let response : Vec<NeighborAddress> = serde_json::from_slice(&bytes)
+            .map_err(|_| Error::Deserialize("Failed to decode replica list".into()))?;
+
+        Ok(response
+           .into_iter()
+           .map(|na| na.addrbytes.to_socketaddr(na.port))
+           .collect())
+    }
+    
+    /// Decode `{signer: principal, num-slots: uint}`
+    /// Cribbed from the Stacks blockchain (https://github.com/stacks-network/stacks-core)
+    fn parse_stackerdb_signer_slot_entry(
+        entry: Value,
+        contract_id: &QualifiedContractIdentifier,
+    ) -> Result<(StacksAddress, u32), String> {
+        let Value::Tuple(slot_data) = entry else {
+            let reason = format!(
+                "StackerDB fn `{contract_id}.{STACKERDB_SLOTS_FUNCTION}` returned non-tuple slot entry",
+            );
+            return Err(reason);
+        };
+
+        let Ok(Value::Principal(signer_principal)) = slot_data.get("signer") else {
+            let reason = format!(
+                "StackerDB fn `{contract_id}.{STACKERDB_SLOTS_FUNCTION}` returned tuple without `signer` entry of type `principal`",
+            );
+            return Err(reason);
+        };
+
+        let Ok(Value::UInt(num_slots)) = slot_data.get("num-slots") else {
+            let reason = format!(
+                "StackerDB fn `{contract_id}.{STACKERDB_SLOTS_FUNCTION}` returned tuple without `num-slots` entry of type `uint`",
+            );
+            return Err(reason);
+        };
+
+        let num_slots = u32::try_from(*num_slots)
+            .map_err(|_| format!("Contract `{contract_id}` set too many slots for one signer (max = {STACKERDB_INV_MAX})"))?;
+        if num_slots > STACKERDB_INV_MAX {
+            return Err(format!("Contract `{contract_id}` set too many slots for one signer (max = {STACKERDB_INV_MAX})"));
+        }
+
+        let PrincipalData::Standard(standard_principal) = signer_principal else {
+            return Err(format!(
+                "StackerDB contract `{contract_id}` set a contract principal as a writer, which is not supported"
+            ));
+        };
+        let addr = StacksAddress::from(standard_principal.clone());
+        Ok((addr, num_slots))
+    }
+
+    /// Attempt to decode the value returned from `stackerdb-get-signer-slots` into a list of
+    /// signers and the number of slots they got.
+    ///
+    /// Cribbed from the Stacks blockchain (https://github.com/stacks-network/stacks-core)
+    fn eval_signer_slots(
+        contract_id: &QualifiedContractIdentifier,
+        value: Value
+    ) -> Result<Vec<(StacksAddress, u32)>, Error> {
+        let result = value.expect_result()?;
+        let slot_list = match result {
+            Err(err_val) => {
+                let err_code = err_val.expect_u128()?;
+                let reason = format!(
+                    "Contract {} failed to run `stackerdb-get-signer-slots`: error u{}",
+                    contract_id, &err_code
+                );
+                wrb_warn!("{}", &reason);
+                return Err(Error::Deserialize(reason));
+            }
+            Ok(ok_val) => ok_val.expect_list()?,
+        };
+
+        let mut total_num_slots = 0u32;
+        let mut ret = vec![];
+        for slot_value in slot_list.into_iter() {
+            let (addr, num_slots) =
+                Self::parse_stackerdb_signer_slot_entry(slot_value, contract_id).map_err(|e| {
+                    let msg = format!("Failed to parse StackerDB slot entry: {}", &e);
+                    wrb_warn!("{}", &msg);
+                    Error::Deserialize(msg)
+                })?;
+
+            if num_slots > STACKERDB_INV_MAX {
+                let reason = format!(
+                    "Contract {} stipulated more than maximum number of slots for one signer ({})",
+                    contract_id, STACKERDB_INV_MAX
+                );
+                wrb_warn!("{}", &reason);
+                return Err(Error::Deserialize(reason));
+            }
+
+            total_num_slots =
+                total_num_slots
+                    .checked_add(num_slots)
+                    .ok_or(Error::Deserialize(format!(
+                        "Contract {} stipulates more than u32::MAX slots",
+                        &contract_id
+                    )))?;
+
+            if total_num_slots > STACKERDB_INV_MAX.into() {
+                let reason = format!(
+                    "Contract {} stipulated more than the maximum number of slots",
+                    contract_id
+                );
+                wrb_warn!("{}", &reason);
+                return Err(Error::Deserialize(reason));
+            }
+
+            ret.push((addr, num_slots));
+        }
+        Ok(ret)
+    }
+
+    /// Get the (uncompressed) list of signers for a stackerdb
+    pub fn run_get_stackerdb_signers(node_addr: &SocketAddr, contract_id: &QualifiedContractIdentifier) -> Result<Vec<StacksAddress>, Error> {
+        let slots_val = Self::run_call_readonly(node_addr, contract_id, STACKERDB_SLOTS_FUNCTION, &[])?;
+        let slots_runs = Self::eval_signer_slots(contract_id, slots_val)?;
+
+        // decompress
+        let mut slots = vec![];
+        for (signer_addr, num_slots) in slots_runs {
+            for _ in 0..num_slots {
+                slots.push(signer_addr.clone());
+            }
+        }
+        Ok(slots)
+    }
+
+    /// Given the address of a local Stacks node, find the address of a node that can serve a given
+    /// replica.
+    pub fn run_find_stackerdb(node_addr: &SocketAddr, contract_id: &QualifiedContractIdentifier) -> Result<SocketAddr, Error> {
+        // does this node replicate it?
+        let mut rpc_info = Self::run_get_info(node_addr)?;
+        let Some(stacker_dbs) = rpc_info.stackerdbs.take() else {
+            // this node doesn't support stackerdbs
+            return Err(Error::RPCError(format!("Node {} does not support StackerDBs", node_addr)));
+        };
+
+        let contract_str = contract_id.to_string();
+        for db in stacker_dbs {
+            if db == contract_str {
+                // this node replicates this DB
+                return Ok(node_addr.clone());
+            }
+        }
+
+        // this node does not replicate this DB, so ask it for one that does
+        let mut replicas = Self::run_get_stackerdb_replicas(node_addr, contract_id)?;
+        let Some(replica) = replicas.pop() else {
+            return Err(Error::RPCError(format!("Node {} cannot find a replica for StackerDB {}", node_addr, contract_id)));
+        };
+
+        Ok(replica)
+    }
+
+    pub fn find_stackerdb(&mut self, contract_id: &QualifiedContractIdentifier) -> Result<SocketAddr, Error> {
+        let Some(node_addr) = self.resolve_node()? else {
+            return Err(Error::NotConnected);
+        };
+        Self::run_find_stackerdb(&node_addr, contract_id)
     }
 }

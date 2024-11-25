@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use std::fs::File;
+
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -39,41 +41,10 @@ use lazy_static::lazy_static;
 pub mod config;
 pub mod globals;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Config {
-    /// Where the helper programs live
-    helper_programs_dir: String,
-    /// Where the node helper lives
-    wrb_wallet_helper: String,
-    /// where the sigin helper lives
-    wrb_signin_helper: String,
-    /// mainnet or testnet
-    mainnet: bool,
-    /// maximum attachment size
-    max_attachment_size: usize,
-    /// number of columns
-    num_columns: usize,
-    /// node host
-    node_host: String,
-    /// node port
-    node_port: u16,
-    /// identity key
-    private_key: Secp256k1PrivateKey
-}
-
-/// Globally-accessible state that is hard to pass around otherwise
-pub struct Globals {
-    pub config: Option<Config>,
-    /// Maps session IDs to wrbpod state
-    pub wrbpod_sessions: HashMap<u128, Wrbpod>,
-}
-
-lazy_static! {
-    pub static ref GLOBALS: Mutex<Globals> = Mutex::new(Globals {
-        config: None,
-        wrbpod_sessions: HashMap::new()
-    });
-}
+pub use crate::core::config::Config;
+pub use crate::core::globals::Globals;
+pub use crate::core::globals::GLOBALS;
+pub use crate::core::globals::LOGFILE;
 
 /// Initialize global config
 pub fn init(mainnet: bool, node_host: &str, node_port: u16) {
@@ -81,6 +52,15 @@ pub fn init(mainnet: bool, node_host: &str, node_port: u16) {
         .lock()
         .unwrap()
         .set_config(Config::default(mainnet, node_host, node_port));
+    
+}
+
+/// Initialize global config with config
+pub fn init_config(conf: Config) {
+    GLOBALS
+        .lock()
+        .unwrap()
+        .set_config(conf)
 }
 
 pub fn with_globals<F, R>(func: F) -> R
@@ -88,9 +68,11 @@ where
     F: FnOnce(&mut Globals) -> R,
 {
     match GLOBALS.lock() {
-        Ok(mut globals) => func(&mut (*globals)),
+        Ok(mut globals) => {
+            func(&mut (*globals))
+        }
         Err(_e) => {
-            error!("FATAL: global mutex poisoned");
+            wrb_error!("FATAL: global mutex poisoned");
             panic!();
         }
     }

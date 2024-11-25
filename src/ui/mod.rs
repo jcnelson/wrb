@@ -26,26 +26,50 @@ use std::io::{Read, Write};
 use crate::vm::storage::Error as DBError;
 use crate::vm;
 
+use clarity::vm::Value;
+use clarity::vm::types::SequenceData;
+use clarity::vm::types::CharType;
+use clarity::vm::types::UTF8Data;
+use clarity::vm::errors::InterpreterError;
+
 use lzma_rs;
 
 pub mod charbuff;
+pub mod events;
+pub mod forms;
 pub mod render;
 pub mod root;
 pub mod scanline;
 pub mod viewport;
 
+pub use root::Root;
+pub use root::SceneGraph;
+
 #[cfg(test)]
 pub mod tests;
 
+pub use crate::ui::render::Renderer;
+
 #[derive(Debug)]
 pub enum Error {
+    /// Something failed to encode or decode
     Codec(String),
+    /// Something got too big (expected, actual)
     Overflow(usize, usize),
+    /// I/O error
     IOError(io::Error),
+    /// WRB VM error
     VMError(vm::Error),
+    /// Clarity VM error
     Clarity(clarity_error),
+    /// Given viewport does not exist
     NoViewport(u128),
+    /// DB Error
     DB(DBError),
+    /// WRB application page error
+    Page(String),
+    /// Event error
+    Event(String)
 }
 
 impl fmt::Display for Error {
@@ -58,6 +82,8 @@ impl fmt::Display for Error {
             Error::Clarity(ref ce) => ce.fmt(f),
             Error::NoViewport(ref idx) => write!(f, "No such viewport with ID {}", idx),
             Error::DB(ref dbe) => dbe.fmt(f),
+            Error::Page(ref msg) => write!(f, "{}", msg),
+            Error::Event(ref msg) => write!(f, "{}", msg),
         }
     }
 }
@@ -72,6 +98,8 @@ impl error::Error for Error {
             Error::Clarity(ref ce) => Some(ce),
             Error::NoViewport(..) => None,
             Error::DB(ref dbe) => Some(dbe),
+            Error::Page(..) => None,
+            Error::Event(..) => None,
         }
     }
 }
@@ -106,7 +134,35 @@ impl From<vm::Error> for Error {
     }
 }
 
-pub struct Renderer {
-    /// maximum attachment size -- a decoded string can't be longer than this
-    max_attachment_size: u64,
+pub trait ValueExtensions {
+    fn expect_utf8(self) -> Result<String, clarity_error>;
+}
+
+impl ValueExtensions for Value {
+    fn expect_utf8(self) -> Result<String, clarity_error> {
+        if let Value::Sequence(SequenceData::String(CharType::UTF8(UTF8Data { data }))) = self {
+            let mut s = String::new();
+            // each item in data is a code point
+            for val_bytes in data.into_iter() {
+                let val_4_bytes : [u8; 4] = match val_bytes.len() {
+                    0 => [0, 0, 0, 0],
+                    1 => [0, 0, 0, val_bytes[0]],
+                    2 => [0, 0, val_bytes[0], val_bytes[1]],
+                    3 => [0, val_bytes[0], val_bytes[1], val_bytes[2]],
+                    4 => [val_bytes[0], val_bytes[1], val_bytes[2], val_bytes[3]],
+                    _ => {
+                        // invalid
+                        s.push_str(&char::REPLACEMENT_CHARACTER.to_string());
+                        continue;
+                    }
+                };
+                let val_u32 = u32::from_be_bytes(val_4_bytes);
+                let c = char::from_u32(val_u32).unwrap_or(char::REPLACEMENT_CHARACTER);
+                s.push_str(&c.to_string());
+            }
+            Ok(s)
+        } else {
+            Err(clarity_error::Interpreter(InterpreterError::Expect("expected utf8 string".into())).into())
+        }
+    }
 }

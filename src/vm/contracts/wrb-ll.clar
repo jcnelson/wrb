@@ -16,17 +16,6 @@
 (define-read-only (get-app-code-hash)
     (var-get vm-app-code-hash))
 
-;; Code that the wrb special case handler uses to load and store a BIP39 seed phrase
-;; into the boot code, for consumption by the public API.  This function is intercepted.
-(define-public (generate-wrb-seed-phrase)
-   (ok true))
-
-(define-data-var last-wrb-seed-phrase (response (string-ascii 300) (string-ascii 512)) (ok ""))
-(define-private (set-last-wrb-seed-phrase (phrase-res (response (string-ascii 300) (string-ascii 512))))
-   (ok (var-set last-wrb-seed-phrase phrase-res)))
-(define-public (get-last-wrb-seed-phrase)
-   (var-get last-wrb-seed-phrase))
-
 ;; Code that the wrb special case handler uses to load and store a call-readonly result
 ;; into the boot code, for consumption via the public API.  This function is intercepted.
 (define-data-var last-call-readonly (response (buff 102400) (string-ascii 512)) (ok 0x))
@@ -151,9 +140,9 @@
 ;; Fetched slots. The data is stored internally.
 (define-map last-wrbpod-fetch-slot-results
     { session-id: uint, slot-id: uint }
-    (response { version: uint, signer: (buff 33) } (string-ascii 512)))
+    (response { version: uint, signer: (optional (buff 33)) } (string-ascii 512)))
 
-(define-private (set-last-wrbpod-fetch-slot-result (session-id uint) (slot-id uint) (result (response { version: uint, signer: (buff 33) } (string-ascii 512))))
+(define-private (set-last-wrbpod-fetch-slot-result (session-id uint) (slot-id uint) (result (response { version: uint, signer: (optional (buff 33)) } (string-ascii 512))))
     (ok (map-set last-wrbpod-fetch-slot-results { session-id: session-id, slot-id: slot-id } result)))
 
 (define-read-only (get-wrbpod-fetch-slot-result (session-id uint) (slot-id uint))
@@ -166,7 +155,7 @@
         (asserts! (is-some (map-get? wrbpod-sessions session-id))
             (err (ascii-512 "no such session")))
 
-        (ok { version: u0, signer: 0x })))
+        (ok { version: u0, signer: none })))
 
 ;; Code that the wrb special case handler uses to fetch a slice
 (define-map last-wrbpod-get-slice-results

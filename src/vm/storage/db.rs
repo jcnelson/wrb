@@ -175,32 +175,38 @@ impl WrbHeadersDB {
 }
 
 impl WrbDB {
-    fn setup_db(path_str: &str, domain: &str) -> Result<Connection, Error> {
+    fn setup_db(path_str: &str, domain: &str) -> Result<(Connection, bool), Error> {
         let mut path = PathBuf::from(path_str);
         path.push(domain);
 
         std::fs::create_dir_all(&path)?;
 
         path.push("db.sqlite");
-        let open_flags = if std::fs::metadata(&path).is_ok() {
-            OpenFlags::SQLITE_OPEN_READ_WRITE
+        let (create, open_flags) = if std::fs::metadata(&path).is_ok() {
+            (false, OpenFlags::SQLITE_OPEN_READ_WRITE)
         } else {
-            OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_READ_WRITE
+            (true, OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_READ_WRITE)
         };
 
         let mut conn = sqlite_open(&path, open_flags, true)?;
 
         if SqliteConnection::check_schema(&conn).is_ok() {
             // no need to initialize
-            return Ok(conn);
+            return Ok((conn, false));
+        }
+
+        if !create {
+            return Ok((conn, false));
         }
 
         let tx = tx_begin_immediate(&mut conn)?;
 
         SqliteConnection::initialize_conn(&tx).map_err(|e| {
-            error!("Failed to initialize DB: {:?}", &e);
+            wrb_error!("Failed to initialize DB: {:?}", &e);
             Error::InitializationFailure
         })?;
+
+        wrb_debug!("Instantiate WrbDB for {} at {}", domain, path_str);
 
         for cmd in KV_SCHEMA.iter() {
             tx.execute(cmd, NO_PARAMS)?;
@@ -220,7 +226,7 @@ impl WrbDB {
         .map_err(|e| Error::DBError(db_error::SqliteError(e)))?;
 
         tx.commit()?;
-        Ok(conn)
+        Ok((conn, true))
     }
 
     fn open_readonly(path_str: &str, domain: &str) -> Result<Connection, Error> {
@@ -237,10 +243,18 @@ impl WrbDB {
         domain: &str,
         chain_tip: Option<&StacksBlockId>,
     ) -> Result<WrbDB, Error> {
-        let conn = WrbDB::setup_db(path_str, domain)?;
+        let (conn, created) = WrbDB::setup_db(path_str, domain)?;
         let chain_tip = match chain_tip {
             Some(ref tip) => (*tip).clone(),
-            None => BOOT_BLOCK_ID.clone(),
+            None => {
+                let height = tipless_get_highest_tip_height(&conn)?;
+                if let Some(bhh) = get_block_at_height(&conn, height, height)? {
+                    bhh
+                }
+                else {
+                    BOOT_BLOCK_ID.clone()
+                }
+            }
         };
 
         Ok(WrbDB {
@@ -248,6 +262,8 @@ impl WrbDB {
             domain: domain.to_string(),
             conn,
             chain_tip,
+            mainnet: true,
+            created
         })
     }
 
@@ -259,6 +275,11 @@ impl WrbDB {
     /// Get the domain
     pub fn get_domain(&self) -> &str {
         &self.domain
+    }
+
+    /// Did we create this DB when we opened it?
+    pub fn created(&self) -> bool {
+        self.created
     }
 
     /// Create a headers DB for this DB
@@ -282,6 +303,7 @@ impl WrbDB {
             chain_tip,
             tip_height,
             conn: &self.conn,
+            mainnet: self.mainnet,
         }
     }
 
@@ -322,6 +344,7 @@ impl WrbDB {
             next_tip: next.clone(),
             write_buf: WriteBuffer::new(),
             tx: tx,
+            mainnet: self.mainnet,
         }
     }
 
@@ -386,7 +409,7 @@ impl WriteBuffer {
                 (next_tip.clone(), next_height)
             };
 
-            test_debug!(
+            wrb_test_debug!(
                 "Dump '{}' = '{}' at {},{} (data = {:?})",
                 &key,
                 &value_hash,
@@ -427,6 +450,10 @@ impl<'a> ReadOnlyWrbStore<'a> {
 
     pub fn as_analysis_db<'b>(&'b mut self) -> AnalysisDatabase<'b> {
         AnalysisDatabase::new(self)
+    }
+    
+    pub fn mainnet(&self) -> bool {
+        self.mainnet
     }
 }
 
@@ -473,7 +500,7 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
                     "Failed to obtain current block height of {} (got None)",
                     &self.chain_tip
                 );
-                error!("{}", &msg);
+                wrb_error!("{}", &msg);
                 panic!("{}", &msg);
             }
             Err(e) => {
@@ -481,7 +508,7 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
                     "Unexpected K/V failure: Failed to get current block height of {}: {:?}",
                     &self.chain_tip, &e
                 );
-                error!("{}", &msg);
+                wrb_error!("{}", &msg);
                 panic!("{}", &msg);
             }
         }
@@ -490,7 +517,7 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
     fn get_block_at_height(&mut self, block_height: u32) -> Option<StacksBlockId> {
         let bhh = get_block_at_height(&self.conn, self.tip_height, block_height.into())
             .expect(&format!("FATAL: no block at height {}", block_height));
-        debug!(
+        wrb_debug!(
             "bhh at height {} for {} = {:?}",
             block_height, self.tip_height, &bhh
         );
@@ -502,20 +529,20 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
     }
 
     fn get_open_chain_tip_height(&mut self) -> u32 {
-        debug!(
+        wrb_debug!(
             "Open chain tip is {} (tip is {})",
             self.tip_height, &self.chain_tip
         );
         self.tip_height.try_into().expect("Block height too high")
     }
 
-    fn get(&mut self, key: &str) -> Result<Option<String>, clarity_error> {
+    fn get_data(&mut self, key: &str) -> Result<Option<String>, clarity_error> {
         for height in (0..self.tip_height + 1).rev() {
-            test_debug!("Get hash for '{}' at height {}", key, self.tip_height);
+            wrb_test_debug!("Get hash for '{}' at height {}", key, self.tip_height);
             let Some(hash) = get_hash(self.conn, height, key).map_err(|e| clarity_error::Interpreter(clarity::vm::errors::InterpreterError::Expect(format!("failed to get hash: {:?}", &e))))? else {
                 continue;
             };
-            test_debug!("Hash for '{}' at height {} is '{}'", key, height, &hash);
+            wrb_test_debug!("Hash for '{}' at height {} is '{}'", key, height, &hash);
             let value_opt = SqliteConnection::get(self.get_side_store(), &hash).expect(&format!(
                 "FATAL: kvstore contained value hash not found in side storage: {}",
                 &hash
@@ -526,12 +553,12 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
         Ok(None)
     }
 
-    fn get_with_proof(&mut self, _: &str) -> Result<Option<(String, Vec<u8>)>, clarity_error> {
+    fn get_data_with_proof(&mut self, _: &str) -> Result<Option<(String, Vec<u8>)>, clarity_error> {
         unimplemented!()
     }
 
-    fn put_all(&mut self, _items: Vec<(String, String)>) -> Result<(), clarity_error> {
-        error!("Attempted to commit changes to read-only K/V");
+    fn put_all_data(&mut self, _items: Vec<(String, String)>) -> Result<(), clarity_error> {
+        wrb_error!("Attempted to commit changes to read-only K/V");
         panic!("BUG: attempted commit to read-only K/V");
     }
 }
@@ -556,7 +583,7 @@ impl<'a> WritableWrbStore<'a> {
             &self.next_tip
         };
 
-        test_debug!("commit_to({} --> {})", target_tip, final_bhh);
+        wrb_test_debug!("commit_to({} --> {})", target_tip, final_bhh);
         SqliteConnection::commit_metadata_to(&self.tx, target_tip, final_bhh)?;
         self.write_buf
             .dump(&self.tx, target_tip, final_bhh)?;
@@ -579,6 +606,10 @@ impl<'a> WritableWrbStore<'a> {
 
     pub fn rollback_block(self) {
         // no-op for now
+    }
+
+    pub fn mainnet(&self) -> bool {
+        self.mainnet
     }
 }
 
@@ -608,7 +639,7 @@ impl<'a> ClarityBackingStore for WritableWrbStore<'a> {
         Some(&handle_wrb_contract_call_special_cases)
     }
 
-    fn get(&mut self, key: &str) -> Result<Option<String>, clarity_error> {
+    fn get_data(&mut self, key: &str) -> Result<Option<String>, clarity_error> {
         if let Some(ref value) = self.write_buf.get(key) {
             return Ok(Some(value.clone()));
         }
@@ -630,7 +661,7 @@ impl<'a> ClarityBackingStore for WritableWrbStore<'a> {
         Ok(None)
     }
 
-    fn get_with_proof(&mut self, _key: &str) -> Result<Option<(String, Vec<u8>)>, clarity_error> {
+    fn get_data_with_proof(&mut self, _key: &str) -> Result<Option<(String, Vec<u8>)>, clarity_error> {
         unimplemented!()
     }
 
@@ -674,7 +705,7 @@ impl<'a> ClarityBackingStore for WritableWrbStore<'a> {
                     "Failed to obtain current block height of {} (got None)",
                     &self.chain_tip
                 );
-                error!("{}", &msg);
+                wrb_error!("{}", &msg);
                 panic!("{}", &msg);
             }
             Err(e) => {
@@ -682,13 +713,13 @@ impl<'a> ClarityBackingStore for WritableWrbStore<'a> {
                     "Unexpected K/V failure: Failed to get current block height of {}: {:?}",
                     &self.chain_tip, &e
                 );
-                error!("{}", &msg);
+                wrb_error!("{}", &msg);
                 panic!("{}", &msg);
             }
         }
     }
 
-    fn put_all(&mut self, items: Vec<(String, String)>) -> Result<(), clarity_error> {
+    fn put_all_data(&mut self, items: Vec<(String, String)>) -> Result<(), clarity_error> {
         for (key, value) in items.into_iter() {
             self.write_buf.put(&key, &value);
         }

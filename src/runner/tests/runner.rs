@@ -19,11 +19,3 @@ use crate::core;
 use crate::core::Config;
 use crate::runner::Runner;
 
-#[test]
-fn test_wallet_seed_phrase() {
-    core::init(false, "localhost", 20443);
-    let runner = Runner::new();
-
-    let seed_phrase = runner.wallet_seed_phrase().unwrap();
-    eprintln!("{}", &seed_phrase);
-}

@@ -26,8 +26,11 @@ use clarity::vm::types::QualifiedContractIdentifier;
 
 use crate::core::Config;
 use crate::runner::http::*;
+use crate::runner::Runner;
 use crate::runner::Error;
 use crate::storage::StackerDBClient;
+
+use stacks_common::types::chainstate::StacksAddress;
 
 use libstackerdb::*;
 
@@ -57,7 +60,7 @@ impl StackerDBSession {
 
     /// connect or reconnect to the node
     fn connect_or_reconnect(&mut self) -> Result<(), Error> {
-        debug!("connect to {}", &self.host);
+        wrb_debug!("connect to {}", &self.host);
         self.sock = Some(TcpStream::connect(self.host)?);
         Ok(())
     }
@@ -180,5 +183,16 @@ impl StackerDBClient for StackerDBSession {
         let ack: StackerDBChunkAckData = serde_json::from_slice(&resp_bytes)
             .map_err(|e| Error::Deserialize(format!("{:?}", &e)))?;
         Ok(ack)
+    }
+
+    /// Find the list of replicas
+    fn find_replicas(&mut self) -> Result<Vec<SocketAddr>, Error> {
+        Runner::run_get_stackerdb_replicas(&self.host, &self.stackerdb_contract_id)
+    }
+
+    /// Get the signers for a StackerDB.
+    /// Return the list of addresses for each slot
+    fn get_signers(&mut self) -> Result<Vec<StacksAddress>, Error> {
+        Runner::run_get_stackerdb_signers(&self.host, &self.stackerdb_contract_id)
     }
 }
