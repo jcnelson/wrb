@@ -15,6 +15,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+//! TODO: DEPRICATED -- this is BNSv1
+
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::env;

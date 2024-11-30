@@ -183,6 +183,17 @@ impl GapBuffer {
         self.insert(ch);
         self.left();
     }
+    
+    /// overwrite a character at the cursor.
+    /// if the cursor is at the end of the buffer, then insert.
+    pub fn overwrite(&mut self, ch: char) {
+        if self.cursor + self.gap == self.buffer.len() {
+            self.insert(ch);
+            return;
+        }
+        self.replace(ch);
+        self.right();
+    }
 
     /// move cursor left, and shift the gap with it.
     /// Return true if cursor moved; false if not.
@@ -397,33 +408,64 @@ impl GapBuffer {
     }
     
     /// index into the gap buffer of the last character in the visible region is.
-    pub fn end_of_area(&self, scroll: usize, num_rows: usize, num_cols: usize) -> usize {
+    pub fn end_of_area(&self, scroll: u64, num_rows: u64, num_cols: u64) -> usize {
         let mut row = 0;
-        let mut col = 0;
         let mut i = scroll;
+        let mut line_len = 0;
         if num_rows == 0 || num_cols == 0 {
-            return None;
+            return 0;
         }
         while row < num_rows {
-            let Some(c) = self.get(i) else {
+            let Some(c) = self.get(usize::try_from(i).unwrap_or(usize::MAX)) else {
                 break;
-            }
+            };
             i += 1;
+            line_len += 1;
 
             if c == '\n' {
                 row += 1;
+                line_len = 0;
             }
-            if i > 0 && i % num_cols == 0 {
+            else if i > 0 && line_len % num_cols == 0 {
                 row += 1;
             }
         }
-        i
+        usize::try_from(i).unwrap_or(usize::MAX)
+    }
+
+    /// index into the gap buffer of the first character in the visible region.
+    pub fn start_of_area(&self, num_rows: u64, num_cols: u64) -> usize {
+        let mut row = 0;
+        let mut line_len = 0;
+        if self.cursor <= 1 {
+            return 0;
+        }
+        if num_rows == 0 || num_cols == 0 {
+            return 0;
+        }
+        let mut i = u64::try_from(self.cursor - 1).unwrap_or(u64::MAX);
+        while i > 0 && row + 1 < num_rows {
+            let Some(c) = self.get(usize::try_from(i).unwrap_or(usize::MAX)) else {
+                break;
+            };
+            i -= 1;
+            line_len += 1;
+
+            if c == '\n' {
+                row += 1;
+                line_len = 0;
+            }
+            else if i > 0 && line_len % num_cols == 0 {
+                row += 1;
+            }
+        }
+        usize::try_from(i).unwrap_or(usize::MAX)
     }
 
     /// find the (row,col) location of the cursor in the text area, given the scroll offset index.
     /// Return None if not visible
-    pub fn cursor_location(&self, scroll: usize, num_rows: usize, num_cols: usize) -> Option<(u64, u64)> {
-        if self.cursor < scroll {
+    pub fn cursor_location(&self, scroll: u64, num_rows: u64, num_cols: u64) -> Option<(u64, u64)> {
+        if self.cursor < usize::try_from(scroll).unwrap_or(usize::MAX) {
             return None;
         }
         if num_rows == 0 || num_cols == 0 {
@@ -432,11 +474,11 @@ impl GapBuffer {
 
         let mut i = scroll;
         let mut row = 0;
-        let mut col = 0l
-        while i < self.cursor {
-            let Some(c) = self.get(i) else {
+        let mut col = 0;
+        while usize::try_from(i).unwrap_or(usize::MAX) < self.cursor {
+            let Some(c) = self.get(usize::try_from(i).unwrap_or(usize::MAX)) else {
                 break;
-            }
+            };
             i += 1;
             col += 1;
             if c == '\n' {
@@ -494,6 +536,27 @@ pub struct TextArea {
 }
 
 impl TextArea {
+    /// Constructor for consumers who just want to use the event handler to manipulate the text
+    pub fn new_detached(text: String, num_rows: u64, num_cols: u64, max_len: usize) -> Self {
+        Self {
+            element_id: 0,
+            viewport_id: 0,
+            row: 0,
+            col: 0,
+            num_rows,
+            num_cols,
+            bg_color: 0u32.into(),
+            fg_color: 0xffffffu32.into(),
+            focused_bg_color: 0xffffffu32.into(),
+            focused_fg_color: 0u32.into(),
+            inner_text: GapBuffer::new(&text, GAP_SIZE),
+            scroll: 0,
+            cursor_col: 0,
+            insert: true,
+            max_len
+        }
+    }
+    
     pub fn text(&self) -> String {
         self.inner_text.to_string()
     }
@@ -508,6 +571,10 @@ impl TextArea {
 
     pub fn insert(&self) -> bool {
         self.insert
+    }
+
+    pub fn scroll(&self) -> usize {
+        self.scroll
     }
 }
 
@@ -650,11 +717,11 @@ impl WrbForm for TextArea {
 
         let new_cursor = viewport.print_iter(self.element_id, self.row, self.col, bg_color, fg_color, self.inner_text.iter_at_offset(self.scroll));
         if focused {
-            if let Some((cursor_row, cursor_column)) = self.inner_text.cursor_location(self.scroll, self.num_rows, self.num_cols) {
+            if let Some((cursor_row, cursor_column)) = self.inner_text.cursor_location(u64::try_from(self.scroll).unwrap_or(u64::MAX), self.num_rows, self.num_cols) {
                 root.set_form_cursor(
                     self.element_id,
                     self.row + cursor_row,
-                    self.col + cursor_col
+                    self.col + cursor_column
                 );
             }
         }
@@ -678,8 +745,8 @@ impl WrbForm for TextArea {
                     Key::Right => {
                         self.inner_text.right();
                         self.cursor_col = self.inner_text.cursor.saturating_sub(self.inner_text.line_start);
-                        if self.inner_text.cursor >= self.inner_text.end_of_area(self.scroll, self.num_rows, self.num_cols) {
-                            self.scroll = self.inner_text.find_line_start();
+                        if self.inner_text.cursor >= self.inner_text.end_of_area(u64::try_from(self.scroll).unwrap_or(u64::MAX), self.num_rows, self.num_cols) {
+                            self.scroll = self.inner_text.start_of_area(self.num_rows, self.num_cols);
                         }
                     }
                     Key::Up => {
@@ -690,19 +757,21 @@ impl WrbForm for TextArea {
                     }
                     Key::Down => {
                         self.inner_text.down(self.cursor_col);
-                        if self.inner_text.cursor >= self.inner_text.end_of_area(self.scroll, self.num_rows, self.num_cols) {
-                            self.scroll = self.inner_text.find_line_start();
+                        if self.inner_text.cursor >= self.inner_text.end_of_area(u64::try_from(self.scroll).unwrap_or(u64::MAX), self.num_rows, self.num_cols) {
+                            self.scroll = self.inner_text.start_of_area(self.num_rows, self.num_cols);
                         }
                     }
                     Key::Backspace => {
                         self.inner_text.backspace();
                         if self.inner_text.cursor < self.scroll {
                             self.scroll = self.inner_text.find_line_start();
+                        }
                     }
                     Key::Delete => {
                         self.inner_text.delete();
                         if self.inner_text.cursor < self.scroll {
                             self.scroll = self.inner_text.find_line_start();
+                        }
                     }
                     Key::Insert => {
                         self.insert = !self.insert;
@@ -711,11 +780,12 @@ impl WrbForm for TextArea {
                         self.inner_text.line_start();
                         if self.inner_text.cursor < self.scroll {
                             self.scroll = self.inner_text.find_line_start();
+                        }
                     }
                     Key::End => {
                         self.inner_text.line_end();
-                        if self.inner_text.cursor >= self.inner_text.end_of_area(self.scroll, self.num_rows, self.num_cols) {
-                            self.scroll = self.inner_text.find_line_start();
+                        if self.inner_text.cursor >= self.inner_text.end_of_area(u64::try_from(self.scroll).unwrap_or(u64::MAX), self.num_rows, self.num_cols) {
+                            self.scroll = self.inner_text.start_of_area(self.num_rows, self.num_cols);
                         }
                     }
                     Key::Char(c) => {
@@ -723,10 +793,10 @@ impl WrbForm for TextArea {
                             self.inner_text.insert(c);
                         }
                         else {
-                            self.inner_text.replace(c);
+                            self.inner_text.overwrite(c);
                         }
-                        if self.inner_text.cursor >= self.inner_text.end_of_area(self.scroll, self.num_rows, self.num_cols) {
-                            self.scroll = self.inner_text.find_line_start();
+                        if self.inner_text.cursor >= self.inner_text.end_of_area(u64::try_from(self.scroll).unwrap_or(u64::MAX), self.num_rows, self.num_cols) {
+                            self.scroll = self.inner_text.start_of_area(self.num_rows, self.num_cols);
                         }
                     }
                     _ => {}

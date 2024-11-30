@@ -241,7 +241,7 @@ impl Renderer {
     pub(crate) fn find_event_loop_function(&self, wrb_tx: &mut WritableWrbStore, headers_db: &dyn HeadersDB, main_code_id: &QualifiedContractIdentifier) -> Result<Option<String>, Error> {
         let event_loop_name = {
             let mainnet = wrb_tx.mainnet();
-            let mut db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
+            let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
             db.begin();
             let mut vm_env = OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
 
@@ -316,7 +316,7 @@ impl Renderer {
     /// Go find event subscriptions.
     pub(crate) fn find_event_subscriptions(&self, wrb_tx: &mut WritableWrbStore, headers_db: &dyn HeadersDB, main_code_id: &QualifiedContractIdentifier) -> Result<HashSet<u128>, Error> {
         let mainnet = wrb_tx.mainnet();
-        let mut db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
+        let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
         db.begin();
         let mut vm_env = OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
 
@@ -354,7 +354,7 @@ impl Renderer {
     /// Go get the event loop delay
     pub(crate) fn find_event_loop_delay(&self, wrb_tx: &mut WritableWrbStore, headers_db: &dyn HeadersDB, main_code_id: &QualifiedContractIdentifier) -> Result<u64, Error> {
         let mainnet = wrb_tx.mainnet();
-        let mut db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
+        let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
         db.begin();
         let mut vm_env = OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
 
@@ -383,7 +383,7 @@ impl Renderer {
     /// Returns whatever the event loop function returns.
     pub(crate) fn run_one_event_loop_pass(&self, wrb_tx: &mut WritableWrbStore, headers_db: &dyn HeadersDB, main_code_id: &QualifiedContractIdentifier, event_handler: &str, event: WrbEvent) -> Result<Value, Error> {
         let mainnet = wrb_tx.mainnet();
-        let mut db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
+        let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
         db.begin();
         let mut vm_env = OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
 

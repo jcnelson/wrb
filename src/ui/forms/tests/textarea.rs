@@ -307,7 +307,6 @@ fn test_gapbuffer_realloc() {
 
 #[test]
 fn test_gapbuffer_line_start_end() {
-    let function_name = "test_gapbuffer_line_start_end";
     let test_vectors = vec![
         "",
         "\n",
@@ -423,9 +422,6 @@ fn test_gapbuffer_line_start_end() {
 #[test]
 fn test_gapbuffer_up_down() {
     // 5 row window, 10 column window
-    let rows = 5;
-    let cols = 10;
-
     let mut gb = GapBuffer::new("", 10);
     assert_eq!(gb.len(), 0);
     assert_eq!(gb.gap, 10);
@@ -511,4 +507,176 @@ fn test_gapbuffer_up_down() {
         assert_eq!(gb.cursor, gb.line_start);
         assert_eq!(gb.cursor, line_offsets[i]);
     }
+}
+
+#[test]
+fn test_textarea_handle_event() {
+    let mut root = Root::null();
+    let mut textarea = TextArea::new_detached("".to_string(), 5, 20, 2_000);
+    assert_eq!(textarea.text(), "");
+    assert_eq!(textarea.cursor(), 0);
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('h'))).unwrap();
+    assert_eq!(textarea.text(), "h");
+    assert_eq!(textarea.cursor(), 1);
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+
+    let mut textarea = TextArea::new_detached("hello world".to_string(), 5, 20, 2_000);
+
+    assert_eq!(textarea.text(), "hello world");
+    assert_eq!(textarea.cursor(), textarea.text().len());
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+    
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Left)).unwrap();
+    assert_eq!(textarea.text(), "hello world");
+    assert_eq!(textarea.cursor(), textarea.text().len() - 1);
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+
+    for _ in 0..100 {
+        textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Left)).unwrap();
+    }
+    assert_eq!(textarea.text(), "hello world");
+    assert_eq!(textarea.cursor(), 0);
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::End)).unwrap();
+    assert_eq!(textarea.text(), "hello world");
+    assert_eq!(textarea.cursor(), textarea.text().len());
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+    
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Home)).unwrap();
+    assert_eq!(textarea.text(), "hello world");
+    assert_eq!(textarea.cursor(), 0);
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::End)).unwrap();
+    assert_eq!(textarea.text(), "hello world");
+    assert_eq!(textarea.cursor(), textarea.text().len());
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('!'))).unwrap();
+    assert_eq!(textarea.text(), "hello world!");
+    assert_eq!(textarea.cursor(), textarea.text().len());
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+        
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Left)).unwrap();
+    assert_eq!(textarea.text(), "hello world!");
+    assert_eq!(textarea.cursor(), textarea.text().len() - 1);
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+    
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Left)).unwrap();
+    assert_eq!(textarea.text(), "hello world!");
+    assert_eq!(textarea.cursor(), textarea.text().len() - 2);
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('f'))).unwrap();
+    assert_eq!(textarea.text(), "hello worlfd!");
+    assert_eq!(textarea.cursor(), textarea.text().len() - 2);
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Home)).unwrap();
+    assert_eq!(textarea.text(), "hello worlfd!");
+    assert_eq!(textarea.cursor(), 0);
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+    
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::End)).unwrap();
+    assert_eq!(textarea.text(), "hello worlfd!");
+    assert_eq!(textarea.cursor(), textarea.text().len());
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+    
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Backspace)).unwrap();
+    assert_eq!(textarea.text(), "hello worlfd");
+    assert_eq!(textarea.cursor(), textarea.text().len());
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+    
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Left)).unwrap();
+    assert_eq!(textarea.text(), "hello worlfd");
+    assert_eq!(textarea.cursor(), textarea.text().len() - 1);
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+    
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Left)).unwrap();
+    assert_eq!(textarea.text(), "hello worlfd");
+    assert_eq!(textarea.cursor(), textarea.text().len() - 2);
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+   
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Delete)).unwrap();
+    assert_eq!(textarea.text(), "hello world");
+    assert_eq!(textarea.cursor(), textarea.text().len() - 1);
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Insert)).unwrap();
+    assert_eq!(textarea.text(), "hello world");
+    assert_eq!(textarea.cursor(), textarea.text().len() - 1);
+    assert_eq!(textarea.insert(), false);
+    assert_eq!(textarea.scroll(), 0);
+    
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Char(' '))).unwrap();
+    assert_eq!(textarea.text(), "hello worl ");
+    assert_eq!(textarea.cursor(), textarea.text().len());
+    assert_eq!(textarea.insert(), false);
+    assert_eq!(textarea.scroll(), 0);
+
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Insert)).unwrap();
+    assert_eq!(textarea.text(), "hello worl ");
+    assert_eq!(textarea.cursor(), textarea.text().len());
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+
+    for _i in 0..5 {
+        textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('\n'))).unwrap();
+        assert_eq!(textarea.cursor(), textarea.text().len());
+        assert_eq!(textarea.insert(), true);
+        
+        textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('a'))).unwrap();
+        assert_eq!(textarea.cursor(), textarea.text().len());
+        assert_eq!(textarea.insert(), true);
+    }
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('b'))).unwrap();
+    assert_eq!(textarea.cursor(), textarea.text().len());
+    assert_eq!(textarea.insert(), true);
+
+    assert_eq!(textarea.text(), "hello worl \na\na\na\na\nab");
+    assert_eq!(textarea.cursor(), textarea.text().len());
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 12);
+
+    for _i in 0..11 {
+        textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Left)).unwrap();
+    }
+    
+    assert_eq!(textarea.text(), "hello worl \na\na\na\na\nab");
+    assert_eq!(textarea.cursor(), textarea.text().len() - 11);
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 0);
+    
+    for _i in 0..8 {
+        textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Right)).unwrap();
+        assert_eq!(textarea.text(), "hello worl \na\na\na\na\nab");
+        assert_eq!(textarea.insert(), true);
+        assert_eq!(textarea.scroll(), 0);
+    }
+    
+    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Right)).unwrap();
+    assert_eq!(textarea.cursor(), textarea.text().len() - 2);
+    assert_eq!(textarea.insert(), true);
+    assert_eq!(textarea.scroll(), 12);
 }

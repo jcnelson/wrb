@@ -137,7 +137,7 @@ impl Renderer {
 
         wrb_debug!("Deploy contract {}", code_id);
 
-        let mut db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
+        let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
         db.begin();
         let mut vm_env =
             OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);

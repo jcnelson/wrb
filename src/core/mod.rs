@@ -28,7 +28,6 @@ use libstackerdb::StackerDBChunkData;
 
 use crate::storage::StackerDBClient;
 use crate::runner::stackerdb::StackerDBSession;
-use crate::runner::bns::BNSNameRecord;
 use crate::storage::Wrbpod;
 
 use stacks_common::util::secp256k1::Secp256k1PrivateKey;

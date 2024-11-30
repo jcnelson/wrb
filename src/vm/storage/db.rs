@@ -24,12 +24,12 @@ use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::ToSql;
 use rusqlite::Transaction;
-use rusqlite::NO_PARAMS;
 
 use clarity::vm::analysis::AnalysisDatabase;
 use clarity::vm::database::{BurnStateDB, ClarityDatabase, HeadersDB, SqliteConnection};
+use clarity::vm::database::sqlite::{sqlite_get_contract_hash, sqlite_insert_metadata, sqlite_get_metadata, sqlite_get_metadata_manual};
 use clarity::vm::errors::{Error as ClarityError, RuntimeErrorType};
-
+use clarity::vm::types::QualifiedContractIdentifier;
 use clarity::vm::database::ClarityBackingStore;
 use clarity::vm::database::SpecialCaseHandler;
 use stacks_common::types::chainstate::BlockHeaderHash;
@@ -163,7 +163,7 @@ fn get_hash(conn: &Connection, tip_height: u64, key: &str) -> Result<Option<Stri
 
 /// Get the highest height stored
 fn tipless_get_highest_tip_height(conn: &Connection) -> Result<u64, Error> {
-    query_row::<u64, _>(conn, "SELECT IFNULL(MAX(height),0) FROM kvstore", NO_PARAMS)
+    query_row::<u64, _>(conn, "SELECT IFNULL(MAX(height),0) FROM kvstore", rusqlite::params![])
         .map_err(|e| e.into())
         .and_then(|height_opt| Ok(height_opt.unwrap_or(0)))
 }
@@ -209,7 +209,7 @@ impl WrbDB {
         wrb_debug!("Instantiate WrbDB for {} at {}", domain, path_str);
 
         for cmd in KV_SCHEMA.iter() {
-            tx.execute(cmd, NO_PARAMS)?;
+            tx.execute(cmd, rusqlite::params![])?;
         }
 
         // sentinel boot block state
@@ -561,6 +561,23 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
         wrb_error!("Attempted to commit changes to read-only K/V");
         panic!("BUG: attempted commit to read-only K/V");
     }
+
+    fn get_contract_hash(&mut self, contract_id: &QualifiedContractIdentifier) -> Result<(StacksBlockId, Sha512Trunc256Sum), clarity_error> {
+        sqlite_get_contract_hash(self, contract_id)
+    }
+
+    fn insert_metadata(&mut self, _contract_id: &QualifiedContractIdentifier, _key: &str, _value: &str) -> Result<(), clarity_error> {
+        wrb_error!("Attempted to write metadata to read-only K/V");
+        panic!("BUG: attempted to write metadata to read-only K/V");
+    }
+
+    fn get_metadata(&mut self, contract_id: &QualifiedContractIdentifier, key: &str) -> Result<Option<String>, clarity_error> {
+        sqlite_get_metadata(self, contract_id, key)
+    }
+
+    fn get_metadata_manual(&mut self, at_height: u32, contract_id: &QualifiedContractIdentifier, key: &str) -> Result<Option<String>, clarity_error> {
+        sqlite_get_metadata_manual(self, at_height, contract_id, key)
+    }
 }
 
 impl<'a> WritableWrbStore<'a> {
@@ -728,5 +745,21 @@ impl<'a> ClarityBackingStore for WritableWrbStore<'a> {
             .expect("FATAL: DB error");
 
         Ok(())
+    }
+    
+    fn get_contract_hash(&mut self, contract_id: &QualifiedContractIdentifier) -> Result<(StacksBlockId, Sha512Trunc256Sum), clarity_error> {
+        sqlite_get_contract_hash(self, contract_id)
+    }
+
+    fn insert_metadata(&mut self, contract_id: &QualifiedContractIdentifier, key: &str, value: &str) -> Result<(), clarity_error> {
+        sqlite_insert_metadata(self, contract_id, key, value)
+    }
+
+    fn get_metadata(&mut self, contract_id: &QualifiedContractIdentifier, key: &str) -> Result<Option<String>, clarity_error> {
+        sqlite_get_metadata(self, contract_id, key)
+    }
+
+    fn get_metadata_manual(&mut self, at_height: u32, contract_id: &QualifiedContractIdentifier, key: &str) -> Result<Option<String>, clarity_error> {
+        sqlite_get_metadata_manual(self, at_height, contract_id, key)
     }
 }
