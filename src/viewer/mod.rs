@@ -70,7 +70,7 @@ pub enum ViewerEvent {
 pub struct Viewer {
     /// row, column dimensions
     size: (u64, u64),
-    /// location of the cursor
+    /// location of the cursor, in column-major order
     cursor: (u16, u16),
     /// frames in, events out
     events: Option<WrbUIEventChannels>,
@@ -179,7 +179,18 @@ impl Viewer {
         self.status.set_text("Done! Press any key to exit".to_string());
     }
 
-    pub fn dispatch_keyboard_event<W: Write>(&mut self, key: Key, frame: Option<&mut Root>, stdout: &mut W) -> Result<(), Error> {
+    fn update_focused_cursor<W: Write>(&mut self, frame: &mut Root, stdout: &mut W) -> Result<(), Error> {
+        if let Some((cursor_row, cursor_col)) = frame.cursor {
+            self.cursor = (u16::try_from(cursor_col).unwrap_or(u16::MAX), u16::try_from(cursor_row).unwrap_or(u16::MAX));
+            self.show_cursor(stdout)?;
+        }
+        else {
+            self.hide_cursor(stdout)?;
+        }
+        Ok(())
+    }
+
+    pub fn dispatch_keyboard_event<W: Write>(&mut self, key: Key, mut frame: Option<&mut Root>, stdout: &mut W) -> Result<(), Error> {
         wrb_debug!("Got key in focus {:?}: {:?}", &self.focus, &key);
         
         // if we have no frame, then focus reverts to the Status widget
@@ -197,8 +208,9 @@ impl Viewer {
                     }
                     Key::Char('\t') => {
                         self.focus = ViewerFocus::Root;
-                        if let Some(frame) = frame {
-                            frame.next_focus();
+                        if let Some(frame) = frame.as_mut() {
+                            frame.next_focus()?;
+                            self.update_focused_cursor(frame, stdout)?;
                         }
                     }
                     Key::Char('\n') => {
@@ -217,8 +229,9 @@ impl Viewer {
                     }
                     Key::Char('\t') => {
                         self.focus = ViewerFocus::Root;
-                        if let Some(frame) = frame {
-                            frame.next_focus();
+                        if let Some(frame) = frame.as_mut() {
+                            frame.next_focus()?;
+                            self.update_focused_cursor(frame, stdout)?;
                         }
                     }
                     _ => {
@@ -231,18 +244,21 @@ impl Viewer {
                 match key {
                     Key::Esc => {
                         self.set_no_focus(stdout)?;
-                        if let Some(frame) = frame {
-                            frame.clear_focus();
+                        if let Some(frame) = frame.as_mut() {
+                            frame.clear_focus()?;
+                            self.update_focused_cursor(frame, stdout)?;
                         }
                     }
                     Key::Char('\t') => {
-                        if let Some(frame) = frame {
-                            frame.next_focus();
+                        if let Some(frame) = frame.as_mut() {
+                            frame.next_focus()?;
+                            self.update_focused_cursor(frame, stdout)?;
                         }
                     }
                     _ => {
-                        if let Some(frame) = frame {
+                        if let Some(frame) = frame.as_mut() {
                             frame.handle_event(WrbFormEvent::Keypress(key))?;
+                            self.update_focused_cursor(frame, stdout)?;
                         }
                     }
                 }
@@ -304,6 +320,7 @@ impl Viewer {
             Renderer::scanlines_into_term_string(scanlines)
         };
         
+        let root_cursor = root.cursor.clone();
         self.last_frame = Some(root);
 
         if self.status.at_top() {
@@ -313,7 +330,15 @@ impl Viewer {
             let status_row = u16::try_from(self.size.0.saturating_sub(self.status.num_rows())).unwrap_or(u16::MAX - 1);
             write!(screen, "{}{}{}{}{}", termion::cursor::Goto(1, 1), &root_text, termion::cursor::Goto(1, status_row + 1), &status_text, &self.goto_cursor())?;
         };
-        
+
+        if let Some((cursor_row, cursor_col)) = root_cursor {
+            self.cursor = (u16::try_from(cursor_col).unwrap_or(u16::MAX), u16::try_from(cursor_row).unwrap_or(u16::MAX));
+            self.show_cursor(screen)?;
+        }
+        else {
+            self.hide_cursor(screen)?;
+        }
+       
         screen.flush()?;
         Ok(())
     }
@@ -397,7 +422,6 @@ impl Viewer {
             }
         }
 
-        self.show_cursor(&mut screen)?;
         wrb_debug!("Viewer main exit");
 
         let _ = events_send.send(WrbEvent::Close);
@@ -408,6 +432,7 @@ impl Viewer {
         let _ = keyboard_thread.join();
         let _ = frame_thread.join();
 
+        self.show_cursor(&mut screen)?;
         Ok(())
     }
 }

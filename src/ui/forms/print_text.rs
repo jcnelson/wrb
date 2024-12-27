@@ -49,6 +49,10 @@ impl WrbForm for PrintText {
         self.viewport_id
     }
 
+    fn focus(&mut self, _root: &mut Root, _focus: bool) -> Result<(), Error> {
+        Ok(())
+    }
+
     /// Load from Clarity value
     fn from_clarity_value(viewport_id: u128, v: Value) -> Result<Self, Error> {
         let text_tuple = v.expect_tuple()?;

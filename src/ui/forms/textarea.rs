@@ -43,6 +43,7 @@ pub struct GapBuffer {
 }
 
 pub const GAP_SIZE : usize = 65536;
+pub const TAB_LEN: usize = 3;
 
 impl GapBuffer {
     pub fn new(start_text: &str, gap_size: usize) -> Self {
@@ -385,23 +386,17 @@ impl GapBuffer {
         self.cursor
     }
 
-    pub fn iter<'a>(&'a self) -> GapBufferIterator<'a> {
-        GapBufferIterator {
-            idx: 0,
-            buff: self
-        }
+    pub fn iter<'a>(&'a self, num_cols: usize) -> GapBufferIterator<'a> {
+        GapBufferIterator::new(0, num_cols, self)
     }
 
-    pub fn iter_at_offset<'a>(&'a self, offset: usize) -> GapBufferIterator<'a> {
-        GapBufferIterator {
-            idx: offset,
-            buff: self
-        }
+    pub fn iter_at_offset<'a>(&'a self, num_cols: usize, offset: usize) -> GapBufferIterator<'a> {
+        GapBufferIterator::new(offset, num_cols, self)
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn to_string(&self, num_cols: usize) -> String {
         let mut ret = String::new();
-        for c in self.iter() {
+        for c in self.iter(num_cols) {
             ret.push(c);
         }
         ret
@@ -485,7 +480,7 @@ impl GapBuffer {
                 row += 1;
                 col = 0;
             }
-            if i > 0 && i % num_cols == 0 {
+            if col >= num_cols {
                 row += 1;
                 col = 0;
             }
@@ -501,14 +496,57 @@ impl GapBuffer {
 
 pub struct GapBufferIterator<'a> {
     idx: usize,
+    print_idx: usize,
+    num_cols: usize,
+    newline_pad: bool,
+    tab_pad: usize,
     buff: &'a GapBuffer
+}
+
+impl<'a> GapBufferIterator<'a> {
+    pub fn new(idx: usize, num_cols: usize, buff: &'a GapBuffer) -> Self {
+        Self {
+            idx,
+            print_idx: 0,
+            num_cols,
+            newline_pad: false,
+            tab_pad: 0,
+            buff
+        }
+    }
 }
 
 impl<'a> Iterator for GapBufferIterator<'a> {
     type Item = char;
     fn next(&mut self) -> Option<Self::Item> {
-        let ret = self.buff.get(self.idx);
+        if self.newline_pad {
+            self.print_idx += 1;
+            if self.print_idx % self.num_cols == 0 {
+                self.newline_pad = false;
+            }
+
+            return Some(' ');
+        }
+        else if self.tab_pad > 0 {
+            self.tab_pad -= 1;
+            self.print_idx += 1;
+            return Some(' ');
+        }
+
+        let mut ret = self.buff.get(self.idx);
         self.idx += 1;
+        self.print_idx += 1;
+
+        if let Some(chr) = ret.as_mut() {
+            if *chr == '\n' {
+                self.newline_pad = true;
+                *chr = ' ';
+            }
+            else if *chr == '\t' {
+                self.tab_pad = TAB_LEN;
+                *chr = ' ';
+            }
+        }
         ret
     }
 }
@@ -557,8 +595,8 @@ impl TextArea {
         }
     }
     
-    pub fn text(&self) -> String {
-        self.inner_text.to_string()
+    pub fn text(&self, num_cols: usize) -> String {
+        self.inner_text.to_string(num_cols)
     }
 
     pub fn set_text(&mut self, txt: String) {
@@ -589,6 +627,19 @@ impl WrbForm for TextArea {
     
     fn viewport_id(&self) -> u128 {
         self.viewport_id
+    }
+
+    fn focus(&mut self, root: &mut Root, focused: bool) -> Result<(), Error> {
+        if focused {
+            if let Some((cursor_row, cursor_column)) = self.inner_text.cursor_location(u64::try_from(self.scroll).unwrap_or(u64::MAX), self.num_rows, self.num_cols) {
+                root.set_form_cursor(
+                    self.viewport_id,
+                    self.row + cursor_row,
+                    self.col + cursor_column
+                );
+            }
+        }
+        Ok(())
     }
 
     /// construct from Clarity value
@@ -715,11 +766,11 @@ impl WrbForm for TextArea {
             self.fg_color.clone()
         };
 
-        let new_cursor = viewport.print_iter(self.element_id, self.row, self.col, bg_color, fg_color, self.inner_text.iter_at_offset(self.scroll));
+        let new_cursor = viewport.print_at_iter(self.element_id, self.row, self.col, bg_color, fg_color, self.inner_text.iter_at_offset(usize::try_from(self.num_cols).unwrap_or(usize::MAX), self.scroll));
         if focused {
             if let Some((cursor_row, cursor_column)) = self.inner_text.cursor_location(u64::try_from(self.scroll).unwrap_or(u64::MAX), self.num_rows, self.num_cols) {
                 root.set_form_cursor(
-                    self.element_id,
+                    self.viewport_id,
                     self.row + cursor_row,
                     self.col + cursor_column
                 );
@@ -731,7 +782,7 @@ impl WrbForm for TextArea {
     
     /// This doesn't generate an event the main loop cares about, but it does update the text
     /// buffer.
-    fn handle_event(&mut self, _root: &mut Root, event: WrbFormEvent) -> Result<Option<Value>, Error> {
+    fn handle_event(&mut self, root: &mut Root, event: WrbFormEvent) -> Result<Option<Value>, Error> {
         match event {
             WrbFormEvent::Keypress(key) => {
                 match key {
@@ -761,13 +812,13 @@ impl WrbForm for TextArea {
                             self.scroll = self.inner_text.start_of_area(self.num_rows, self.num_cols);
                         }
                     }
-                    Key::Backspace => {
+                    Key::Backspace | Key::Ctrl('h') => {
                         self.inner_text.backspace();
                         if self.inner_text.cursor < self.scroll {
                             self.scroll = self.inner_text.find_line_start();
                         }
                     }
-                    Key::Delete => {
+                    Key::Delete | Key::Ctrl('?') => {
                         self.inner_text.delete();
                         if self.inner_text.cursor < self.scroll {
                             self.scroll = self.inner_text.find_line_start();
@@ -803,6 +854,8 @@ impl WrbForm for TextArea {
                 }
             }
         }
+        // update cursor
+        self.focus(root, root.is_focused(self.element_id))?;
         Ok(None)
     }
 }

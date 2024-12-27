@@ -99,6 +99,13 @@ impl WrbForm for Checkbox {
         self.viewport_id
     }
     
+    fn focus(&mut self, root: &mut Root, focused: bool) -> Result<(), Error> {
+        if focused {
+            root.set_form_cursor(self.viewport_id, self.row + u64::try_from(self.selector).unwrap_or(0), self.col + 1);
+        }
+        Ok(())
+    }
+    
     /// Load from a Clarity value
     fn from_clarity_value(viewport_id: u128, v: Value) -> Result<Self, Error> {
         let checkbox_tuple = v.expect_tuple()?;
@@ -250,13 +257,14 @@ impl WrbForm for Checkbox {
       
         if focused {
             // set the cursor to be the checkbox at the selector
-            root.set_form_cursor(self.element_id, self.row + u64::try_from(self.selector).unwrap_or(0), self.col + 1);
+            root.set_form_cursor(self.viewport_id, self.row + u64::try_from(self.selector).unwrap_or(0), self.col + 1);
         }
         Ok(next_cursor)
     }
     
     /// Handle an event
     fn handle_event(&mut self, root: &mut Root, event: WrbFormEvent) -> Result<Option<Value>, Error> {
+        self.focus(root, root.is_focused(self.element_id))?;
         let WrbFormEvent::Keypress(keycode) = event else {
             return Ok(None);
         };
@@ -264,11 +272,13 @@ impl WrbForm for Checkbox {
         // up and down move the selector
         if keycode == root.keycode_up() {
             self.selector = self.selector.saturating_sub(1);
+            self.focus(root, root.is_focused(self.element_id))?;
             return Ok(None);
         }
 
         if keycode == root.keycode_down() {
             self.selector = self.selector.saturating_add(1).min(self.options.len().saturating_sub(1));
+            self.focus(root, root.is_focused(self.element_id))?;
             return Ok(None);
         }
 

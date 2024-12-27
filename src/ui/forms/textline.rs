@@ -90,6 +90,13 @@ impl WrbForm for TextLine {
     fn viewport_id(&self) -> u128 {
         self.viewport_id
     }
+    
+    fn focus(&mut self, root: &mut Root, focused: bool) -> Result<(), Error> {
+        if focused {
+            root.set_form_cursor(self.viewport_id, self.row, self.col + u64::try_from(self.cursor).unwrap_or(0));
+        }
+        Ok(())
+    }
 
     /// construct from Clarity value
     fn from_clarity_value(viewport_id: u128, v: Value) -> Result<Self, Error> {
@@ -200,19 +207,21 @@ impl WrbForm for TextLine {
             self.fg_color.clone()
         };
 
-        let padded_text = format!("{:width$}", &self.inner_text, width=self.max_len);
+        let (_vp_rows, vp_cols) = viewport.dims();
+        let max_viewable_cols = vp_cols.saturating_sub(self.col).min(u64::try_from(self.max_len).unwrap_or(u64::MAX));
+        let padded_text = format!("{:width$}", &self.inner_text, width=usize::try_from(max_viewable_cols).unwrap_or(0));
         let new_cursor = viewport.print_to(self.element_id, self.row, self.col, bg_color, fg_color, &padded_text);
 
         // set the form cursor to be wherever our cursor is
         if focused {
-            root.set_form_cursor(self.element_id, self.row, self.col + u64::try_from(self.cursor).unwrap_or(0));
+            root.set_form_cursor(self.viewport_id, self.row, self.col + u64::try_from(self.cursor).unwrap_or(0));
         }
         Ok(new_cursor)
     }
     
     /// This doesn't generate an event the main loop cares about, but it does update the text
     /// buffer.
-    fn handle_event(&mut self, _root: &mut Root, event: WrbFormEvent) -> Result<Option<Value>, Error> {
+    fn handle_event(&mut self, root: &mut Root, event: WrbFormEvent) -> Result<Option<Value>, Error> {
         match event {
             WrbFormEvent::Keypress(key) => {
                 match key {
@@ -222,7 +231,7 @@ impl WrbForm for TextLine {
                     Key::Right => {
                         self.cursor = self.cursor.saturating_add(1).min(self.inner_text.len()).min(self.max_len);
                     }
-                    Key::Backspace => {
+                    Key::Backspace | Key::Ctrl('h') => {
                         if self.cursor > 0 {
                             let mut new_text = String::with_capacity(self.max_len);
                             for (i, chr) in self.inner_text.chars().enumerate() {
@@ -235,7 +244,7 @@ impl WrbForm for TextLine {
                             self.cursor -= 1;
                         }
                     }
-                    Key::Delete => {
+                    Key::Delete | Key::Ctrl('?') => {
                         if self.cursor < self.inner_text.len() {
                             let mut new_text = String::with_capacity(self.max_len);
                             for (i, chr) in self.inner_text.chars().enumerate() {
@@ -258,7 +267,7 @@ impl WrbForm for TextLine {
                     }
                     Key::Char(c) => {
                         if c != '\n' && c != '\r' {
-                            if self.cursor == self.inner_text.len() {
+                            if self.cursor == self.inner_text.len() && self.inner_text.len() < self.max_len {
                                 self.inner_text.push(c);
                             }
                             else if self.inner_text.len() < self.max_len {
@@ -273,14 +282,15 @@ impl WrbForm for TextLine {
                                     new_text.push(chr);
                                 }
                                 self.inner_text = new_text;
+                                self.cursor += 1;
                             }
-                            self.cursor += 1;
                         }
                     }
                     _ => {}
                 }
             }
         }
+        self.focus(root, root.is_focused(self.element_id))?;
         Ok(None)
     }
 }

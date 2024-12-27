@@ -64,7 +64,7 @@ use crate::ui::events::WrbFrameData;
 use crate::ui::charbuff::CharBuff;
 
 use crate::ui::forms::WrbForm;
-use crate::ui::forms::{RawText, PrintText, Button, Checkbox, WrbFormTypes};
+use crate::ui::forms::{RawText, PrintText, Button, Checkbox, TextLine, TextArea, WrbFormTypes};
 
 pub struct Renderer {
     /// maximum attachment size -- a decoded string can't be longer than this
@@ -171,14 +171,22 @@ impl Renderer {
             None,
             None,
             |env| env.global_context.database.get_contract(main_code_id),
-        )?;
+        )
+        .map_err(|e| {
+            wrb_error!("Failed to get contract '{}': {:?}", &main_code_id, &e);
+            e
+        })?;
 
         let (_, _, events) = vm_env.execute_in_env(
             StandardPrincipalData::transient().into(),
             None,
             Some(contract.contract_context),
             |env| env.eval_raw_with_rules(code, ASTRules::PrecheckSize),
-        )?;
+        )
+        .map_err(|e| {
+            wrb_error!("Failed to run query '{}': {:?}", &code, &e);
+            e
+        })?;
 
         let values = events
             .into_iter()
@@ -249,6 +257,7 @@ impl Renderer {
         let mut ui_contents : Vec<Box<dyn WrbForm>> = Vec::with_capacity(num_elements as usize);
 
         for index in 0..num_elements {
+            wrb_debug!("Get element {} of {}", index, num_elements);
             let qry = format!("(print (wrb-ui-element-descriptor u{}))", index);
             let ui_desc_tuple = self.run_query_code(vm_env, main_code_id, &qry)?
                 .pop()
@@ -274,6 +283,7 @@ impl Renderer {
                 continue;
             };
 
+            wrb_debug!("Add UI element type {:?}", &ui_type);
             match ui_type {
                 WrbFormTypes::Text => {
                     // go get the text 
@@ -324,10 +334,28 @@ impl Renderer {
                     ui_contents.push(Box::new(checkbox));
                 }
                 WrbFormTypes::TextLine => {
-                    todo!();
+                    // go get the textline
+                    let qry = format!("(print (wrb-ui-get-textline-element u{}))", index);
+                    let viewport_textline_value = self.run_query_code(vm_env, main_code_id, &qry)?
+                        .pop()
+                        .expect("FATAL: expected one result")
+                        .expect_optional()?
+                        .expect("FATAL: textline UI element not defined at defined index");
+
+                    let textline = TextLine::from_clarity_value(viewport_id, viewport_textline_value)?;
+                    ui_contents.push(Box::new(textline));
                 }
                 WrbFormTypes::TextArea => {
-                    todo!();
+                    // go get the textarea
+                    let qry = format!("(print (wrb-ui-get-textarea-element u{}))", index);
+                    let viewport_textarea_value = self.run_query_code(vm_env, main_code_id, &qry)?
+                        .pop()
+                        .expect("FATAL: expected one result")
+                        .expect_optional()?
+                        .expect("FATAL: textline UI element not defined at defined index");
+
+                    let textarea = TextArea::from_clarity_value(viewport_id, viewport_textarea_value)?;
+                    ui_contents.push(Box::new(textarea));
                 }
             }
         }

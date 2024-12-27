@@ -235,6 +235,7 @@ impl Viewport {
     }
 
     /// Write word-wrapped text to this viewport from a char iterator.
+    /// attempts to word-wrap.
     /// `start_col` and `start_row` are coordinates within the viewport
     pub fn print_iter(
         &mut self,
@@ -247,6 +248,21 @@ impl Viewport {
     ) -> (u64, u64) {
         self.update_element_coord(element_id, start_row, start_col);
         self.buff.print_iter(element_id, start_row, start_col, bg_color, fg_color, iter)
+    }
+
+    /// Write word-wrapped text to this viewport from a char iterator.
+    /// `start_col` and `start_row` are coordinates within the viewport
+    pub fn print_at_iter(
+        &mut self,
+        element_id: u128,
+        start_row: u64,
+        start_col: u64,
+        bg_color: Color,
+        fg_color: Color,
+        iter: impl Iterator<Item = char>
+    ) -> (u64, u64) {
+        self.update_element_coord(element_id, start_row, start_col);
+        self.buff.print_at_iter(element_id, start_row, start_col, bg_color, fg_color, iter)
     }
 
     /// What's the relative (row, column) coordinate in this viewport, given the absolute

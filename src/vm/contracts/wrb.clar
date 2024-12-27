@@ -3,6 +3,8 @@
 (define-constant WRB_UI_TYPE_PRINT u5)
 (define-constant WRB_UI_TYPE_BUTTON u6)
 (define-constant WRB_UI_TYPE_CHECKBOX u7)
+(define-constant WRB_UI_TYPE_TEXTLINE u8)
+(define-constant WRB_UI_TYPE_TEXTAREA u9)
 
 ;; Special event types, beyond UI events
 (define-constant WRB_EVENT_CLOSE u0)
@@ -247,6 +249,40 @@
        options: (list 256 { text: (string-utf8 200), selected: bool })
     })
 
+(define-map viewport-textline-list
+    ;; index
+    uint
+    ;; payload
+    {
+       element-id: uint,
+       col: uint,
+       row: uint,
+       bg-color: uint,
+       fg-color: uint,
+       focused-bg-color: uint,
+       focused-fg-color: uint,
+       max-len: uint,
+       text: (string-utf8 12800)
+    })
+
+(define-map viewport-textarea-list
+    ;; index
+    uint
+    ;; payload
+    {
+       element-id: uint,
+       col: uint,
+       row: uint,
+       num-rows: uint,
+       num-cols: uint,
+       bg-color: uint,
+       fg-color: uint,
+       focused-bg-color: uint,
+       focused-fg-color: uint,
+       max-len: uint,
+       text: (string-utf8 12800)
+    })
+
 ;; Add static raw text to a viewport
 (define-public (wrb-viewport-static-text (id uint) (row uint) (col uint) (bg-color uint) (fg-color uint) (text (string-utf8 12800)))
    (let (
@@ -438,7 +474,7 @@
 (define-public (wrb-viewport-add-checkbox (id uint) (row uint) (col uint) (options (list 256 { text: (string-utf8 200), selected: bool })))
     (let (
         (ui-list-len (var-get wrb-ui-list-len))
-        (checkbox-color (var-get wrb-default-button-colors))
+        (checkbox-color (var-get wrb-default-checkbox-colors))
         (focused-checkbox-color (var-get wrb-default-focused-checkbox-colors))
         (selector-color (var-get wrb-default-checkbox-selector-color))
     )
@@ -467,6 +503,82 @@
     (ok ui-list-len)
 ))
 
+;; Default text line style
+(define-data-var wrb-default-textline-colors { fg: uint, bg: uint } { fg: u0, bg: u16776960 })
+(define-data-var wrb-default-focused-textline-colors { fg: uint, bg: uint } { fg: u0, bg: u16711935 })
+
+;; Add a textline to a viewport
+;; Returns the textline ID
+(define-public (wrb-viewport-add-textline (id uint) (row uint) (col uint) (max-len uint) (text (string-utf8 12800)))
+    (let (
+        (ui-list-len (var-get wrb-ui-list-len))
+        (textline-color (var-get wrb-default-textline-colors))
+        (focused-textline-color (var-get wrb-default-focused-textline-colors))
+    )
+    ;; add textline element
+    (map-set viewport-textline-list
+        ui-list-len
+        {
+            element-id: ui-list-len,
+            col: col,
+            row: row,
+            fg-color: (get fg textline-color),
+            bg-color: (get bg textline-color),
+            focused-fg-color: (get fg focused-textline-color),
+            focused-bg-color: (get bg focused-textline-color),
+            max-len: max-len,
+            text: text
+        })
+
+    ;; register UI element
+    (map-set wrb-ui-list
+        ui-list-len
+        { viewport: id, type: WRB_UI_TYPE_TEXTLINE })
+
+    ;; next UI element
+    (var-set wrb-ui-list-len (+ u1 ui-list-len))
+    (ok ui-list-len)
+)) 
+
+;; Default text area style
+(define-data-var wrb-default-textarea-colors { fg: uint, bg: uint } { fg: u0, bg: u16776960 })
+(define-data-var wrb-default-focused-textarea-colors { fg: uint, bg: uint } { fg: u0, bg: u16711935 })
+
+;; Add a textarea to a viewport
+;; Returns the textarea ID
+(define-public (wrb-viewport-add-textarea (id uint) (row uint) (col uint) (num-rows uint) (num-cols uint) (max-len uint) (text (string-utf8 12800)))
+    (let (
+        (ui-list-len (var-get wrb-ui-list-len))
+        (textarea-color (var-get wrb-default-textarea-colors))
+        (focused-textarea-color (var-get wrb-default-focused-textarea-colors))
+    )
+    ;; add textarea element
+    (map-set viewport-textarea-list
+        ui-list-len
+        {
+            element-id: ui-list-len,
+            col: col,
+            row: row,
+            num-rows: num-rows,
+            num-cols: num-cols,
+            fg-color: (get fg textarea-color),
+            bg-color: (get bg textarea-color),
+            focused-fg-color: (get fg focused-textarea-color),
+            focused-bg-color: (get bg focused-textarea-color),
+            max-len: max-len,
+            text: text
+        })
+
+    ;; register UI element
+    (map-set wrb-ui-list
+        ui-list-len
+        { viewport: id, type: WRB_UI_TYPE_TEXTAREA })
+
+    ;; next UI element
+    (var-set wrb-ui-list-len (+ u1 ui-list-len))
+    (ok ui-list-len)
+)) 
+
 ;; Get the number of UI elements
 (define-read-only (wrb-ui-len)
    (var-get wrb-ui-list-len))
@@ -490,6 +602,14 @@
 ;; Get a checkbox element
 (define-read-only (wrb-ui-get-checkbox-element (index uint))
    (map-get? viewport-checkbox-list index))
+
+;; Get a textline element
+(define-read-only (wrb-ui-get-textline-element (index uint))
+   (map-get? viewport-textline-list index))
+
+;; Get a textarea element
+(define-read-only (wrb-ui-get-textarea-element (index uint))
+   (map-get? viewport-textarea-list index))
 
 ;; Get the minimum dynamic text index for a viewport
 (define-read-only (wrb-dynamic-ui-index-start (id uint))

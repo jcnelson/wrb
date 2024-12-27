@@ -342,7 +342,7 @@ impl Root {
         // redraw all forms and re-compute their cursors
         for (_element_id, ui_content) in forms.iter_mut() {
             let viewport_id = ui_content.viewport_id();
-            let cursor = viewport_cursors.get(&viewport_id).cloned().unwrap_or((0, 0));
+            let cursor = viewport_cursors.remove(&viewport_id).unwrap_or((0, 0));
             
             wrb_debug!("Redraw form {}", _element_id);
             let new_cursor = ui_content.render(self, cursor)?;
@@ -492,7 +492,8 @@ impl Root {
     }
 
     /// Update the focus pointer
-    pub fn next_focus(&mut self) {
+    pub fn next_focus(&mut self) -> Result<(), Error> {
+        let old_focused = self.focused.clone();
         if let Some(focused) = self.focused {
             let next_focused = self.focus_order.get(&focused).cloned();
             self.focused = next_focused;
@@ -500,10 +501,29 @@ impl Root {
         else {
             self.focused = self.focus_first.clone();
         }
+        if let Some(old_focused) = old_focused {
+            if let Some(mut form) = self.forms.remove(&old_focused) {
+                form.focus(self, false)?;
+                self.forms.insert(old_focused, form);
+            }
+        }
+        if let Some(focused) = self.focused {
+            if let Some(mut form) = self.forms.remove(&focused) {
+                form.focus(self, true)?;
+                self.forms.insert(focused, form);
+            }
+        }
+        Ok(())
     }
 
-    pub fn clear_focus(&mut self) {
-        self.focused = None;
+    pub fn clear_focus(&mut self) -> Result<(), Error> {
+        if let Some(old_focused) = self.focused.take() {
+            if let Some(mut form) = self.forms.remove(&old_focused) {
+                form.focus(self, false)?;
+                self.forms.insert(old_focused, form);
+            }
+        }
+        Ok(())
     }
 
     /// Is this element focused?
@@ -538,12 +558,8 @@ impl Root {
     }
 
     /// resolve a row/column within a form to the absolute row/column
-    fn form_cursor_to_root_cursor(&self, form_element_id: u128, form_cursor_row: u64, form_cursor_col: u64) -> Option<(u64, u64)> {
-        let Some(form) = self.forms.get(&form_element_id) else {
-            return None;
-        };
-
-        let Some((viewport_row, viewport_col)) = self.scenegraph.viewport_coords(form.viewport_id()) else {
+    fn form_cursor_to_root_cursor(&self, form_viewport_id: u128, form_cursor_row: u64, form_cursor_col: u64) -> Option<(u64, u64)> {
+        let Some((viewport_row, viewport_col)) = self.scenegraph.viewport_coords(form_viewport_id) else {
             return None;
         };
 

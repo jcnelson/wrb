@@ -48,6 +48,10 @@ impl WrbForm for RawText {
         self.viewport_id
     }
 
+    fn focus(&mut self, _root: &mut Root, _focus: bool) -> Result<(), Error> {
+        Ok(())
+    }
+
     /// construct from Clarity value
     fn from_clarity_value(viewport_id: u128, v: Value) -> Result<Self, Error> {
         let text_tuple = v.expect_tuple()?;

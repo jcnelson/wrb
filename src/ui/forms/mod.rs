@@ -152,6 +152,8 @@ pub trait WrbForm : Send + WrbFormClone + WrbFormDebug {
     fn element_id(&self) -> u128;
     /// What viewport are we attached to?
     fn viewport_id(&self) -> u128;
+    /// Set or unset focused
+    fn focus(&mut self, root: &mut Root, focused: bool) -> Result<(), Error>;
     /// Render this
     fn render(&mut self, root: &mut Root, cursor: (u64, u64)) -> Result<(u64, u64), Error>;
     /// Handle an (inputted) event.

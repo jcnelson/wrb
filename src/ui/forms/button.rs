@@ -52,6 +52,13 @@ impl WrbForm for Button {
     fn viewport_id(&self) -> u128 {
         self.viewport_id
     }
+
+    fn focus(&mut self, root: &mut Root, focused: bool) -> Result<(), Error> {
+        if focused {
+            root.set_form_cursor(self.viewport_id, self.row, self.col + 1);
+        }
+        Ok(())
+    }
     
     /// Construct from Clarity value
     fn from_clarity_value(viewport_id: u128, v: Value) -> Result<Self, Error> {
@@ -154,13 +161,14 @@ impl WrbForm for Button {
 
         if focused {
             // point the cursor at the start of the button text
-            root.set_form_cursor(self.element_id, self.row, self.col + 1);
+            root.set_form_cursor(self.viewport_id, self.row, self.col + 1);
         }
         Ok(new_cursor)
     }
     
     /// Handle an event
     fn handle_event(&mut self, root: &mut Root, event: WrbFormEvent) -> Result<Option<Value>, Error> {
+        self.focus(root, root.is_focused(self.element_id))?;
         let WrbFormEvent::Keypress(keycode) = event else {
             return Ok(None);
         };

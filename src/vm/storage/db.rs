@@ -155,7 +155,7 @@ fn get_hash(conn: &Connection, tip_height: u64, key: &str) -> Result<Option<Stri
     let args: &[&dyn ToSql] = &[&key.to_string(), &u64_to_sql(tip_height)?];
     query_row::<String, _>(
         conn,
-        "SELECT data_hash FROM kvstore WHERE key = ?1 AND height = ?2",
+        "SELECT data_hash FROM kvstore WHERE key = ?1 AND height <= ?2 ORDER BY height DESC",
         args,
     )
     .map_err(|e| e.into())
@@ -537,20 +537,17 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
     }
 
     fn get_data(&mut self, key: &str) -> Result<Option<String>, clarity_error> {
-        for height in (0..self.tip_height + 1).rev() {
-            wrb_test_debug!("Get hash for '{}' at height {}", key, self.tip_height);
-            let Some(hash) = get_hash(self.conn, height, key).map_err(|e| clarity_error::Interpreter(clarity::vm::errors::InterpreterError::Expect(format!("failed to get hash: {:?}", &e))))? else {
-                continue;
-            };
-            wrb_test_debug!("Hash for '{}' at height {} is '{}'", key, height, &hash);
-            let value_opt = SqliteConnection::get(self.get_side_store(), &hash).expect(&format!(
-                "FATAL: kvstore contained value hash not found in side storage: {}",
-                &hash
-            ));
+        wrb_test_debug!("Get hash for '{}' at height {}", key, self.tip_height);
+        let Some(hash) = get_hash(self.conn, self.tip_height, key).map_err(|e| clarity_error::Interpreter(clarity::vm::errors::InterpreterError::Expect(format!("failed to get hash: {:?}", &e))))? else {
+            return Ok(None);
+        };
+        wrb_test_debug!("Hash for '{}' at height {} is '{}'", key, self.tip_height, &hash);
+        let value_opt = SqliteConnection::get(self.get_side_store(), &hash).expect(&format!(
+            "FATAL: kvstore contained value hash not found in side storage: {}",
+            &hash
+        ));
 
-            return Ok(value_opt);
-        }
-        Ok(None)
+        return Ok(value_opt);
     }
 
     fn get_data_with_proof(&mut self, _: &str) -> Result<Option<(String, Vec<u8>)>, clarity_error> {
@@ -660,22 +657,17 @@ impl<'a> ClarityBackingStore for WritableWrbStore<'a> {
         if let Some(ref value) = self.write_buf.get(key) {
             return Ok(Some(value.clone()));
         }
-        for height in (0..self.tip_height + 1).rev() {
-            let hash_opt = get_hash(&self.tx, height, key).expect("FATAL: kvstore read error");
+        wrb_test_debug!("Get hash for '{}' at height {}", key, self.tip_height);
+        let Some(hash) = get_hash(&self.tx, self.tip_height, key).map_err(|e| clarity_error::Interpreter(clarity::vm::errors::InterpreterError::Expect(format!("failed to get hash: {:?}", &e))))? else {
+            return Ok(None);
+        };
+        wrb_test_debug!("Hash for '{}' at height {} is '{}'", key, self.tip_height, &hash);
+        let value_opt = SqliteConnection::get(self.get_side_store(), &hash).expect(&format!(
+            "FATAL: kvstore contained value hash not found in side storage: {}",
+            &hash
+        ));
 
-            if hash_opt.is_none() {
-                continue;
-            }
-
-            let hash = hash_opt.unwrap();
-            let value_opt = SqliteConnection::get(self.get_side_store(), &hash).expect(&format!(
-                "FATAL: kvstore contained value hash not found in side storage: {}",
-                &hash
-            ));
-
-            return Ok(value_opt);
-        }
-        Ok(None)
+        return Ok(value_opt);
     }
 
     fn get_data_with_proof(&mut self, _key: &str) -> Result<Option<(String, Vec<u8>)>, clarity_error> {

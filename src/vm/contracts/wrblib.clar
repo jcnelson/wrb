@@ -73,6 +73,16 @@
 (define-private (wrb-checkbox (id uint) (row uint) (col uint) (options (list 256 { text: (string-utf8 200), selected: bool })))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-viewport-add-checkbox id row col options))
 
+;; Add a textline to the viewport.
+;; Returns its UI element ID.
+(define-private (wrb-textline (id uint) (row uint) (col uint) (max-len uint) (text (string-utf8 12800)))
+    (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-viewport-add-textline id row col max-len text))
+
+;; Add a textarea to the viewport.
+;; Returns its UI element ID.
+(define-private (wrb-textarea (id uint) (row uint) (col uint) (num-rows uint) (num-cols uint) (max-len uint) (text (string-utf8 12800)))
+    (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-viewport-add-textarea id row col num-rows num-cols max-len text))
+
 ;; Get the number of UI elements
 (define-read-only (wrb-ui-len)
     (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-ui-len))
@@ -96,6 +106,14 @@
 ;; Get a checkbox UI element at a particular index
 (define-read-only (wrb-ui-get-checkbox-element (index uint))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-ui-get-checkbox-element index))
+
+;; Get a textline UI element at a particular index
+(define-read-only (wrb-ui-get-textline-element (index uint))
+    (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-ui-get-textline-element index))
+
+;; Get a textarea UI element at a particular index
+(define-read-only (wrb-ui-get-textarea-element (index uint))
+    (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-ui-get-textarea-element index))
 
 ;; Get the minimum dynamic UI index for a viewport
 (define-read-only (wrb-dynamic-ui-index-start (id uint))
