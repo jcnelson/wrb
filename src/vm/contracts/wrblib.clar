@@ -10,9 +10,6 @@
 (define-private (wrb-call-readonly? (contract principal) (function-name (string-ascii 128)) (function-args-list (buff 102400)))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb call-readonly contract function-name function-args-list))
 
-(define-private (wrb-get-attachment? (attachment-hash (buff 20)))
-    (contract-call? 'SP000000000000000000002Q6VF78.wrb get-attachment attachment-hash))
-
 (define-private (wrb-buff-to-string-utf8? (arg (buff 102400)))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb buff-to-string-utf8 arg))
 

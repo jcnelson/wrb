@@ -15,8 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-//! TODO: DEPRICATED -- this is BNSv1
-
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::env;
@@ -40,10 +38,7 @@ use stacks_common::util::hash::Hash160;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct BNSNameRecord {
-    pub zonefile_hash: Hash160,
-    pub owner: PrincipalData,
-    pub lease_started_at: u128,
-    pub lease_ending_at: Option<u128>,
+    pub zonefile: Option<Vec<u8>>,
 }
 
 impl TryFrom<ResponseData> for BNSNameRecord {
@@ -52,66 +47,22 @@ impl TryFrom<ResponseData> for BNSNameRecord {
         if !v_ok.committed {
             return Err(Error::Deserialize("Expected Ok-response".into()));
         }
-        let Value::Tuple(data) = *v_ok.data else {
-            return Err(Error::Deserialize("Expected tuple".into()));
+        let Value::Optional(zonefile_opt) = *v_ok.data else {
+            return Err(Error::Deserialize("Expected optional".into()));
         };
-        let zonefile_hash_value = data
-            .get("zonefile-hash")
-            .map_err(|_| Error::Deserialize("Expected zonefile-hash".into()))?
-            .clone();
-        let owner_value = data
-            .get("owner")
-            .map_err(|_| Error::Deserialize("Expected owner".into()))?
-            .clone();
-        let lease_started_at_value = data
-            .get("lease-started-at")
-            .map_err(|_| Error::Deserialize("Expected lease-started-at".into()))?
-            .clone();
-        let lease_ending_at_value = data
-            .get("lease-ending-at")
-            .map_err(|_| Error::Deserialize("Expected lease-ending-at".into()))?
-            .clone();
-
-        let Value::Sequence(SequenceData::Buffer(zonefile_hash_bytes)) = zonefile_hash_value else {
-            return Err(Error::Deserialize("Expected buff".into()));
-        };
-        if u32::from(zonefile_hash_bytes.len()?) != 20 {
-            return Err(Error::Deserialize("Expected (buff 20)".into()));
-        }
-
-        let Value::Principal(owner) = owner_value else {
-            return Err(Error::Deserialize("Expected principal".into()));
-        };
-        let Value::UInt(lease_started_at) = lease_started_at_value else {
-            return Err(Error::Deserialize(
-                "Expected uint for lease_started_at".into(),
-            ));
-        };
-        let Value::Optional(lease_ending_at) = lease_ending_at_value else {
-            return Err(Error::Deserialize(
-                "Expected optional for lease_ending_at".into(),
-            ));
-        };
-        let lease_ending_at = if let Some(lease_ending_at) = lease_ending_at.data {
-            let Value::UInt(lease_ending_at) = *lease_ending_at else {
-                return Err(Error::Deserialize(
-                    "Expected uint for lease_ending_at".into(),
-                ));
+        let zonefile = if let Some(zonefile_value) = zonefile_opt.data {
+            let Value::Sequence(SequenceData::Buffer(zonefile_bytes)) = *zonefile_value else {
+                return Err(Error::Deserialize("Expected buff".into()));
             };
-            Some(lease_ending_at)
+            if u32::from(zonefile_bytes.len()?) > 8192 {
+                return Err(Error::Deserialize("Expected (buff 8192)".into()));
+            }
+            Some(zonefile_bytes.data)
         } else {
             None
         };
 
-        let mut zonefile_hash160_bytes = [0u8; 20];
-        zonefile_hash160_bytes.copy_from_slice(&zonefile_hash_bytes.data);
-
-        Ok(BNSNameRecord {
-            zonefile_hash: Hash160(zonefile_hash160_bytes),
-            owner,
-            lease_started_at,
-            lease_ending_at,
-        })
+        Ok(BNSNameRecord { zonefile })
     }
 }
 
@@ -140,7 +91,8 @@ impl TryFrom<ResponseData> for BNSError {
 }
 
 impl Runner {
-    /// Look up a BNS name
+    /// Look up a BNS name.
+    /// Must be from the `zonefile-resolver` contract in BNSv2
     pub fn bns_lookup(
         &mut self,
         namespace: &str,

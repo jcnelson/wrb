@@ -20,12 +20,6 @@
        (unwrap-panic (contract-call? .wrb-ll call-readonly contract function-name function-args-list))
        (contract-call? .wrb-ll get-last-call-readonly)))
 
-;; Get an attachment
-(define-public (get-attachment (attachment-hash (buff 20)))
-   (begin
-       (unwrap-panic (contract-call? .wrb-ll get-attachment attachment-hash))
-       (contract-call? .wrb-ll get-last-attachment)))
-
 ;; Tries to converts a buff to a string-utf8
 (define-public (buff-to-string-utf8 (arg (buff 102400)))
    (begin

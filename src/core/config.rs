@@ -87,11 +87,17 @@ impl Config {
         &self.private_key
     }
 
+    /// This is the contract ID of the BNS contract that can resolve a name to a zonefile.
     pub fn get_bns_contract_id(&self) -> QualifiedContractIdentifier {
         if self.mainnet {
-            QualifiedContractIdentifier::parse("SP000000000000000000002Q6VF78.bns").unwrap()
+            QualifiedContractIdentifier::parse(
+                "SP2QEZ06AGJ3RKJPBV14SY1V5BBFNAW33D96YPGZF.zonefile-resolver",
+            )
+            .unwrap()
         } else {
-            QualifiedContractIdentifier::parse("ST000000000000000000002AMW42H.bns").unwrap()
+            // TODO: This is wrong
+            QualifiedContractIdentifier::parse("ST000000000000000000002AMW42H.zonefile-resolver")
+                .unwrap()
         }
     }
 

@@ -26,16 +26,6 @@
 (define-public (get-last-call-readonly)
    (var-get last-call-readonly))
 
-;; Code that the wrb special case handler uses to get an attachment from the node.
-;; This function is intercepted.
-(define-data-var last-attachment (response (buff 102400) (string-ascii 512)) (ok 0x))
-(define-public (get-attachment (attachment-hash (buff 20)))
-   (ok 0x))
-(define-private (set-last-attachment (result (response (buff 102400) (string-ascii 512))))
-   (ok (var-set last-attachment result)))
-(define-public (get-last-attachment)
-   (var-get last-attachment))
-
 ;; Code that the wrb special case handler uses to load and store a buff-to-string-utf8 value
 ;; into the boot code, for consumption by the public API.  This function is intercepted
 (define-public (buff-to-string-utf8 (arg (buff 102400)))

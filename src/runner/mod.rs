@@ -292,37 +292,6 @@ impl Runner {
         Self::run_call_readonly(&node_addr, contract_id, function_name, function_args)
     }
 
-    /// Get an attachment from Atlas, given a resolved node
-    pub fn run_get_attachment(
-        node_addr: &SocketAddr,
-        attachment_hash: &Hash160,
-    ) -> Result<Vec<u8>, Error> {
-        let mut sock = TcpStream::connect(node_addr)?;
-        let bytes = run_http_request(
-            &mut sock,
-            node_addr,
-            "GET",
-            &format!("/v2/attachments/{}", attachment_hash),
-            None,
-            &[],
-        )?;
-
-        let response_hex: String = serde_json::from_slice(&bytes)
-            .map_err(|_| Error::Deserialize("Failed to decode attachment response bytes".into()))?;
-        let response = hex_bytes(&response_hex).map_err(|_| {
-            Error::Deserialize("Failed to decode attachment: not a hex string".into())
-        })?;
-        Ok(response)
-    }
-
-    /// Get an attachment from Atlas
-    pub fn get_attachment(&mut self, attachment_hash: &Hash160) -> Result<Vec<u8>, Error> {
-        let Some(node_addr) = self.resolve_node()? else {
-            return Err(Error::NotConnected);
-        };
-        Self::run_get_attachment(&node_addr, attachment_hash)
-    }
-
     /// Get /v2/info
     pub fn run_get_info(node_addr: &SocketAddr) -> Result<RPCPeerInfoData, Error> {
         let mut sock = TcpStream::connect(node_addr)?;

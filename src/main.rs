@@ -147,15 +147,11 @@ fn load_wrbsite_source(wrbsite_name: &str, source: Option<String>) -> Result<Vec
         let bns_rec = bns_res
             .map_err(|e| format!("BNS error when looking up '{}': {:?}", wrbsite_name, &e))?;
 
-        // load as an attachment
-        let attachment = runner.get_attachment(&bns_rec.zonefile_hash).map_err(|e| {
-            format!(
-                "Failed to get attachment for '{}' (hash {}): {:?}",
-                wrbsite_name, &bns_rec.zonefile_hash, &e
-            )
-        })?;
+        let Some(zonefile) = bns_rec.zonefile else {
+            return Err(format!("Name '{}' has no zonefile data", &wrbsite_name));
+        };
 
-        return Ok(attachment);
+        return Ok(zonefile);
     };
 
     // treat source as a path to uncompressed clarity code

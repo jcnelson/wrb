@@ -226,52 +226,6 @@ fn handle_wrb_call_readonly(
     Ok(())
 }
 
-/// Trampoline code for contract-call to `.wrb get-attachment`
-fn handle_wrb_get_attachment(
-    global_context: &mut GlobalContext,
-    sender: PrincipalData,
-    sponsor: Option<PrincipalData>,
-    contract_id: &QualifiedContractIdentifier,
-    args: &[Value],
-    wrb_lowlevel_contract: Contract,
-    mut runner: Runner,
-) -> Result<(), Error> {
-    // must be 1 arguments -- the attachment hash
-    if args.len() != 1 {
-        return Err(InterpreterError::InterpreterError(format!(
-            "Expected 1 arguments, got {}",
-            args.len()
-        ))
-        .into());
-    }
-
-    let attachment_hash = args[0].clone().expect_buff_padded(20, 0)?;
-    let mut attachment_hash_bytes = [0u8; 20];
-    attachment_hash_bytes.copy_from_slice(&attachment_hash[0..20]);
-
-    // carry out the RPC
-    let value = match runner.get_attachment(&Hash160(attachment_hash_bytes)) {
-        Ok(value) => Value::okay(Value::buff_from(value).unwrap()).unwrap(),
-        Err(e) => err_ascii_512(&format!("wrb: failed get-attachment: {:?}", &e)),
-    };
-    env_with_global_context(
-        global_context,
-        sender,
-        sponsor,
-        wrb_lowlevel_contract.contract_context,
-        |env| {
-            env.execute_contract_allow_private(
-                contract_id,
-                "set-last-attachment",
-                &[SymbolicExpression::atom_value(value)],
-                false,
-            )
-        },
-    )
-    .expect("FATAL: failed to set read-only call result");
-    Ok(())
-}
-
 /// Trampoline code for contract-call to `.wrb buff-to-string-utf8`
 fn handle_buff_to_string_utf8(
     global_context: &mut GlobalContext,
@@ -1135,17 +1089,6 @@ pub fn handle_wrb_contract_call_special_cases(
         match function_name {
             "call-readonly" => {
                 handle_wrb_call_readonly(
-                    global_context,
-                    sender,
-                    sponsor,
-                    contract_id,
-                    args,
-                    wrb_lowlevel_contract,
-                    runner,
-                )?;
-            }
-            "get-attachment" => {
-                handle_wrb_get_attachment(
                     global_context,
                     sender,
                     sponsor,
