@@ -15,13 +15,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use clarity::vm::Value;
-use crate::ui::Error;
 use crate::ui::charbuff::Color;
 use crate::ui::root::Root;
+use crate::ui::Error;
 use crate::ui::ValueExtensions;
+use clarity::vm::Value;
 
-use crate::ui::forms::{WrbFormTypes, WrbFormEvent, WrbForm};
+use crate::ui::forms::{WrbForm, WrbFormEvent, WrbFormTypes};
 
 /// UI command to print text to a viewport
 #[derive(Clone, PartialEq, Debug)]
@@ -33,18 +33,18 @@ pub struct PrintText {
     bg_color: Color,
     fg_color: Color,
     text: String,
-    newline: bool
+    newline: bool,
 }
 
 impl WrbForm for PrintText {
     fn type_id(&self) -> WrbFormTypes {
         WrbFormTypes::Print
     }
-    
+
     fn element_id(&self) -> u128 {
         self.element_id
     }
-    
+
     fn viewport_id(&self) -> u128 {
         self.viewport_id
     }
@@ -62,14 +62,30 @@ impl WrbForm for PrintText {
             .expect("FATAL: no `text`")
             .expect_utf8()?;
 
-        let cursor = match text_tuple.get("cursor").cloned().expect("FATAL: no `cursor`").expect_optional()? {
+        let cursor = match text_tuple
+            .get("cursor")
+            .cloned()
+            .expect("FATAL: no `cursor`")
+            .expect_optional()?
+        {
             Some(cursor_tuple_value) => {
                 let cursor_tuple = cursor_tuple_value.expect_tuple()?;
-                let row = cursor_tuple.get("row").cloned().expect("FATAL: no `row`").expect_u128()?;
-                let col = cursor_tuple.get("col").cloned().expect("FATAL: no `col`").expect_u128()?;
-                Some((u64::try_from(row).map_err(|_| Error::Codec("row too big".into()))?, u64::try_from(col).map_err(|_| Error::Codec("col too big".into()))?))
+                let row = cursor_tuple
+                    .get("row")
+                    .cloned()
+                    .expect("FATAL: no `row`")
+                    .expect_u128()?;
+                let col = cursor_tuple
+                    .get("col")
+                    .cloned()
+                    .expect("FATAL: no `col`")
+                    .expect_u128()?;
+                Some((
+                    u64::try_from(row).map_err(|_| Error::Codec("row too big".into()))?,
+                    u64::try_from(col).map_err(|_| Error::Codec("col too big".into()))?,
+                ))
             }
-            None => None
+            None => None,
         };
 
         let bg_color_u128 = text_tuple
@@ -79,7 +95,7 @@ impl WrbForm for PrintText {
             .expect_u128()?
             // truncate
             & 0xffffffffu128;
-        
+
         let fg_color_u128 = text_tuple
             .get("fg-color")
             .cloned()
@@ -87,7 +103,7 @@ impl WrbForm for PrintText {
             .expect_u128()?
             // trunate
             &0xffffffffu128;
-        
+
         let element_id = text_tuple
             .get("element-id")
             .cloned()
@@ -100,8 +116,8 @@ impl WrbForm for PrintText {
             .expect("FATAL: no `newline`")
             .expect_bool()?;
 
-        let bg_color : Color = u32::try_from(bg_color_u128).expect("infallible").into();
-        let fg_color : Color = u32::try_from(fg_color_u128).expect("infallible").into();
+        let bg_color: Color = u32::try_from(bg_color_u128).expect("infallible").into();
+        let fg_color: Color = u32::try_from(fg_color_u128).expect("infallible").into();
 
         Ok(PrintText {
             element_id,
@@ -110,7 +126,7 @@ impl WrbForm for PrintText {
             bg_color,
             fg_color,
             text,
-            newline
+            newline,
         })
     }
 
@@ -127,14 +143,31 @@ impl WrbForm for PrintText {
         let cursor = self.cursor.clone().unwrap_or(cursor);
         wrb_test_debug!("Print '{}' at {:?}", &self.text, &cursor);
         if self.newline {
-            Ok(viewport.println(self.element_id, cursor.0, cursor.1, self.bg_color, self.fg_color, &self.text))
-        }
-        else {
-            Ok(viewport.print(self.element_id, cursor.0, cursor.1, self.bg_color, self.fg_color, &self.text))
+            Ok(viewport.println(
+                self.element_id,
+                cursor.0,
+                cursor.1,
+                self.bg_color,
+                self.fg_color,
+                &self.text,
+            ))
+        } else {
+            Ok(viewport.print(
+                self.element_id,
+                cursor.0,
+                cursor.1,
+                self.bg_color,
+                self.fg_color,
+                &self.text,
+            ))
         }
     }
 
-    fn handle_event(&mut self, _root: &mut Root, _event: WrbFormEvent) -> Result<Option<Value>, Error> {
+    fn handle_event(
+        &mut self,
+        _root: &mut Root,
+        _event: WrbFormEvent,
+    ) -> Result<Option<Value>, Error> {
         Ok(None)
     }
 }

@@ -15,13 +15,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use clarity::vm::Value;
-use crate::ui::Error;
 use crate::ui::charbuff::Color;
 use crate::ui::root::Root;
+use crate::ui::Error;
 use crate::ui::ValueExtensions;
+use clarity::vm::Value;
 
-use crate::ui::forms::{WrbFormTypes, WrbFormEvent, WrbForm};
+use crate::ui::forms::{WrbForm, WrbFormEvent, WrbFormTypes};
 
 use termion::event::Key;
 
@@ -40,9 +40,11 @@ pub struct GapBuffer {
     pub(crate) lineno: usize,
     /// offset into `buffer` where the line begins
     pub(crate) line_start: usize,
+    /// whether or not to emit debug messages
+    pub(crate) debug: bool,
 }
 
-pub const GAP_SIZE : usize = 65536;
+pub const GAP_SIZE: usize = 65536;
 pub const TAB_LEN: usize = 3;
 
 impl GapBuffer {
@@ -59,10 +61,24 @@ impl GapBuffer {
             gap: gap_size,
             gap_size,
             lineno: Self::count_lines(start_text),
-            line_start: 0
+            line_start: 0,
+            debug: false,
         };
         gapbuffer.line_start = gapbuffer.find_line_start();
         gapbuffer
+    }
+
+    pub fn set_debug(&mut self, dbg: bool) {
+        self.debug = dbg;
+    }
+
+    pub fn debug<F>(&self, dbg: F)
+    where
+        F: FnOnce() -> (),
+    {
+        if self.debug {
+            dbg();
+        }
     }
 
     fn count_lines(txt: &str) -> usize {
@@ -87,7 +103,10 @@ impl GapBuffer {
             i = i.saturating_sub(1);
         }
 
-        if self.cursor > 0 && i.saturating_add(1) + self.gap < self.buffer.len() && self.buffer[i] == u32::from('\n') {
+        if self.cursor > 0
+            && i.saturating_add(1) + self.gap < self.buffer.len()
+            && self.buffer[i] == u32::from('\n')
+        {
             i = i.saturating_add(1);
         }
         i
@@ -171,7 +190,7 @@ impl GapBuffer {
             self.line_start = self.find_line_start();
         }
     }
-    
+
     /// delete a character at the cursor
     pub fn delete(&mut self) {
         self.right();
@@ -184,7 +203,7 @@ impl GapBuffer {
         self.insert(ch);
         self.left();
     }
-    
+
     /// overwrite a character at the cursor.
     /// if the cursor is at the end of the buffer, then insert.
     pub fn overwrite(&mut self, ch: char) {
@@ -225,7 +244,7 @@ impl GapBuffer {
         self.buffer[self.cursor + self.gap] = 0;
         self.buffer[self.cursor] = ch;
         self.cursor += 1;
-        
+
         if ch == u32::from('\n') {
             self.lineno = self.lineno.saturating_sub(1);
             self.line_start = self.find_line_start();
@@ -300,7 +319,7 @@ impl GapBuffer {
         }
         self.cursor == old_cursor
     }
-    
+
     /// shift the cursor up one row, and shift the gap with it.  Takes into account newlines.
     ///
     /// Put the cursor at a location such that it's either at the same column (relative to the
@@ -314,11 +333,10 @@ impl GapBuffer {
 
         self.line_start();
         self.left();
-        self.line_start = self.find_line_start();
-        self.cursor = self.line_start;
+        self.line_start();
 
         for _ in 0..col {
-            if self.chr().map(|c| c != '\n').unwrap_or(true) {
+            if self.chr().map(|c| c == '\n').unwrap_or(true) {
                 break;
             }
             self.right();
@@ -333,9 +351,10 @@ impl GapBuffer {
     pub fn down(&mut self, col: usize) {
         self.line_end();
         self.right();
-        self.line_start = self.find_line_start();
+        self.line_start();
+
         for _ in 0..col {
-            if self.chr().map(|c| c != '\n').unwrap_or(true) {
+            if self.chr().map(|c| c == '\n').unwrap_or(true) {
                 break;
             }
             self.right();
@@ -367,14 +386,20 @@ impl GapBuffer {
     pub fn get(&self, idx: usize) -> Option<char> {
         if idx < self.cursor {
             return self.buffer.get(idx).map(|x| char::from_u32(*x)).flatten();
-        }
-        else {
-            return self.buffer.get(idx + self.gap).map(|x| char::from_u32(*x)).flatten();
+        } else {
+            return self
+                .buffer
+                .get(idx + self.gap)
+                .map(|x| char::from_u32(*x))
+                .flatten();
         }
     }
 
     pub fn chr(&self) -> Option<char> {
-        return self.buffer.get(self.cursor + self.gap).map(|x| char::from_u32(*x).unwrap_or(char::REPLACEMENT_CHARACTER))
+        return self
+            .buffer
+            .get(self.cursor + self.gap)
+            .map(|x| char::from_u32(*x).unwrap_or(char::REPLACEMENT_CHARACTER));
     }
 
     pub fn line(&self) -> usize {
@@ -386,23 +411,32 @@ impl GapBuffer {
         self.cursor
     }
 
-    pub fn iter<'a>(&'a self, num_cols: usize) -> GapBufferIterator<'a> {
-        GapBufferIterator::new(0, num_cols, self)
+    pub fn iter<'a>(&'a self, num_rows: usize, num_cols: usize) -> GapBufferIterator<'a> {
+        let mut iter = GapBufferIterator::new(0, num_rows, num_cols, self);
+        iter.set_debug(self.debug);
+        iter
     }
 
-    pub fn iter_at_offset<'a>(&'a self, num_cols: usize, offset: usize) -> GapBufferIterator<'a> {
-        GapBufferIterator::new(offset, num_cols, self)
+    pub fn iter_at_offset<'a>(
+        &'a self,
+        num_rows: usize,
+        num_cols: usize,
+        offset: usize,
+    ) -> GapBufferIterator<'a> {
+        let mut iter = GapBufferIterator::new(offset, num_rows, num_cols, self);
+        iter.set_debug(self.debug);
+        iter
     }
 
     pub fn to_string(&self, num_cols: usize) -> String {
         let mut ret = String::new();
-        for c in self.iter(num_cols) {
+        for c in self.iter(0, num_cols) {
             ret.push(c);
         }
         ret
     }
-    
-    /// index into the gap buffer of the last character in the visible region is.
+
+    /// index into the gap buffer of the last character in the visible would be.
     pub fn end_of_area(&self, scroll: u64, num_rows: u64, num_cols: u64) -> usize {
         let mut row = 0;
         let mut i = scroll;
@@ -410,7 +444,16 @@ impl GapBuffer {
         if num_rows == 0 || num_cols == 0 {
             return 0;
         }
+        self.debug(|| wrb_debug!("end_of_area: row = {}, i = {}", row, i));
         while row < num_rows {
+            self.debug(|| {
+                wrb_debug!(
+                    "end_of_area: row = {}, i = {}, line_len = {}",
+                    row,
+                    i,
+                    line_len
+                )
+            });
             let Some(c) = self.get(usize::try_from(i).unwrap_or(usize::MAX)) else {
                 break;
             };
@@ -420,17 +463,33 @@ impl GapBuffer {
             if c == '\n' {
                 row += 1;
                 line_len = 0;
-            }
-            else if i > 0 && line_len % num_cols == 0 {
+            } else if i > 0 && line_len % num_cols == 0 {
                 row += 1;
             }
         }
         usize::try_from(i).unwrap_or(usize::MAX)
     }
 
-    /// index into the gap buffer of the first character in the visible region.
-    pub fn start_of_area(&self, num_rows: u64, num_cols: u64) -> usize {
-        let mut row = 0;
+    /// index into the gap buffer of the first visible character in the visible region.
+    pub fn start_of_area(&self, scroll: u64, num_rows: u64, num_cols: u64) -> usize {
+        if num_rows == 0 || num_cols == 0 {
+            return 0;
+        }
+
+        let (scrolled_cursor_row, _) = self
+            .cursor_location(scroll, num_rows, num_cols)
+            .unwrap_or((num_rows - 1, 0));
+
+        let mut row = scrolled_cursor_row + 1; // num_rows.saturating_sub(scrolled_cursor_row);
+        self.debug(|| {
+            wrb_debug!(
+                "start_of_area: scroll = {}, cursor at row {}, scan back {} rows",
+                scroll,
+                scrolled_cursor_row,
+                row
+            )
+        });
+
         let mut line_len = 0;
         if self.cursor <= 1 {
             return 0;
@@ -439,21 +498,48 @@ impl GapBuffer {
             return 0;
         }
         let mut i = u64::try_from(self.cursor - 1).unwrap_or(u64::MAX);
-        while i > 0 && row + 1 < num_rows {
+        let mut last_c = None;
+        while i > 0 && row > 0 {
             let Some(c) = self.get(usize::try_from(i).unwrap_or(usize::MAX)) else {
+                self.debug(|| wrb_debug!("start_of_area: no character at {}", i));
                 break;
             };
+            self.debug(|| {
+                wrb_debug!(
+                    "start_of_area: i = {}, row = {}, line_len = {}, c = '{}', last_c = {:?}",
+                    i,
+                    row,
+                    line_len,
+                    &c,
+                    &last_c
+                )
+            });
             i -= 1;
             line_len += 1;
 
             if c == '\n' {
-                row += 1;
+                row -= 1;
                 line_len = 0;
+            } else if i > 0 && line_len % num_cols == 0 {
+                row -= 1;
             }
-            else if i > 0 && line_len % num_cols == 0 {
-                row += 1;
+            last_c = Some(c);
+        }
+        self.debug(|| {
+            wrb_debug!(
+                "start_of_area: i = {}, row = {}, line_len = {}, last_c = {:?}",
+                i,
+                row,
+                line_len,
+                &last_c
+            )
+        });
+        if let Some(c) = last_c {
+            if c == '\n' {
+                i += 2;
             }
         }
+        self.debug(|| wrb_debug!("start_of_area: {}", i));
         usize::try_from(i).unwrap_or(usize::MAX)
     }
 
@@ -461,11 +547,20 @@ impl GapBuffer {
     /// Return None if not visible
     pub fn cursor_location(&self, scroll: u64, num_rows: u64, num_cols: u64) -> Option<(u64, u64)> {
         if self.cursor < usize::try_from(scroll).unwrap_or(usize::MAX) {
+            self.debug(|| {
+                wrb_debug!(
+                    "cursor_location: self.cursor ({}) < scroll ({})",
+                    self.cursor,
+                    scroll
+                )
+            });
             return None;
         }
         if num_rows == 0 || num_cols == 0 {
             return None;
         }
+
+        self.debug(|| wrb_debug!("cursor_location: scroll = {}", scroll));
 
         let mut i = scroll;
         let mut row = 0;
@@ -474,6 +569,15 @@ impl GapBuffer {
             let Some(c) = self.get(usize::try_from(i).unwrap_or(usize::MAX)) else {
                 break;
             };
+            self.debug(|| {
+                wrb_debug!(
+                    "cursor_location: i = {}, row = {}, col = {}, c = '{}'",
+                    i,
+                    row,
+                    col,
+                    &c
+                )
+            });
             i += 1;
             col += 1;
             if c == '\n' {
@@ -487,9 +591,11 @@ impl GapBuffer {
 
             if row >= num_rows {
                 // not visible
+                self.debug(|| wrb_debug!("row {} >= num_rows {}", row, num_rows));
                 return None;
             }
         }
+        self.debug(|| wrb_debug!("cursor_location: cursor at ({},{})", row, col));
         Some((row, col))
     }
 }
@@ -497,21 +603,39 @@ impl GapBuffer {
 pub struct GapBufferIterator<'a> {
     idx: usize,
     print_idx: usize,
+    /// if this is not zero, then output will be padded to fill the num_rows * num_cols grid
+    num_rows: usize,
     num_cols: usize,
     newline_pad: bool,
     tab_pad: usize,
-    buff: &'a GapBuffer
+    buff: &'a GapBuffer,
+    debug: bool,
 }
 
 impl<'a> GapBufferIterator<'a> {
-    pub fn new(idx: usize, num_cols: usize, buff: &'a GapBuffer) -> Self {
+    pub fn new(idx: usize, num_rows: usize, num_cols: usize, buff: &'a GapBuffer) -> Self {
         Self {
             idx,
             print_idx: 0,
+            num_rows,
             num_cols,
             newline_pad: false,
             tab_pad: 0,
-            buff
+            buff,
+            debug: false,
+        }
+    }
+
+    pub fn set_debug(&mut self, debug: bool) {
+        self.debug = debug;
+    }
+
+    pub fn debug<F>(&self, dbg: F)
+    where
+        F: FnOnce() -> (),
+    {
+        if self.debug {
+            dbg();
         }
     }
 }
@@ -519,18 +643,41 @@ impl<'a> GapBufferIterator<'a> {
 impl<'a> Iterator for GapBufferIterator<'a> {
     type Item = char;
     fn next(&mut self) -> Option<Self::Item> {
+        if self.print_idx >= self.num_rows * self.num_cols {
+            return None;
+        }
+
         if self.newline_pad {
             self.print_idx += 1;
             if self.print_idx % self.num_cols == 0 {
                 self.newline_pad = false;
             }
 
-            return Some(' ');
-        }
-        else if self.tab_pad > 0 {
+            let ret = Some(' ');
+            self.debug(|| {
+                wrb_debug!(
+                    "idx={} print_idx={} ret={:?} newline_pad={}",
+                    self.idx - 1,
+                    self.print_idx - 1,
+                    &ret,
+                    self.newline_pad
+                )
+            });
+            return ret;
+        } else if self.tab_pad > 0 {
             self.tab_pad -= 1;
             self.print_idx += 1;
-            return Some(' ');
+            let ret = Some(' ');
+            self.debug(|| {
+                wrb_debug!(
+                    "idx={} print_idx={} ret={:?} tab_pad={}",
+                    self.idx - 1,
+                    self.print_idx - 1,
+                    &ret,
+                    self.tab_pad
+                )
+            });
+            return ret;
         }
 
         let mut ret = self.buff.get(self.idx);
@@ -541,12 +688,34 @@ impl<'a> Iterator for GapBufferIterator<'a> {
             if *chr == '\n' {
                 self.newline_pad = true;
                 *chr = ' ';
-            }
-            else if *chr == '\t' {
+            } else if *chr == '\t' {
                 self.tab_pad = TAB_LEN;
                 *chr = ' ';
             }
+            self.debug(|| {
+                wrb_debug!(
+                    "idx={} print_idx={} ret={:?} text newline_pad={} tab_pad={}",
+                    self.idx - 1,
+                    self.print_idx - 1,
+                    &ret,
+                    self.newline_pad,
+                    self.tab_pad
+                )
+            });
         }
+        if self.num_rows > 0 && self.print_idx <= self.num_rows * self.num_cols && ret.is_none() {
+            // padding the remaining space
+            ret = Some(' ');
+            self.debug(|| {
+                wrb_debug!(
+                    "idx={} print_idx={} ret={:?} remainder",
+                    self.idx - 1,
+                    self.print_idx - 1,
+                    &ret
+                )
+            });
+        }
+
         ret
     }
 }
@@ -591,10 +760,10 @@ impl TextArea {
             scroll: 0,
             cursor_col: 0,
             insert: true,
-            max_len
+            max_len,
         }
     }
-    
+
     pub fn text(&self, num_cols: usize) -> String {
         self.inner_text.to_string(num_cols)
     }
@@ -620,22 +789,26 @@ impl WrbForm for TextArea {
     fn type_id(&self) -> WrbFormTypes {
         WrbFormTypes::TextArea
     }
-    
+
     fn element_id(&self) -> u128 {
         self.element_id
     }
-    
+
     fn viewport_id(&self) -> u128 {
         self.viewport_id
     }
 
     fn focus(&mut self, root: &mut Root, focused: bool) -> Result<(), Error> {
         if focused {
-            if let Some((cursor_row, cursor_column)) = self.inner_text.cursor_location(u64::try_from(self.scroll).unwrap_or(u64::MAX), self.num_rows, self.num_cols) {
+            if let Some((cursor_row, cursor_column)) = self.inner_text.cursor_location(
+                u64::try_from(self.scroll).unwrap_or(u64::MAX),
+                self.num_rows,
+                self.num_cols,
+            ) {
                 root.set_form_cursor(
                     self.viewport_id,
                     self.row + cursor_row,
-                    self.col + cursor_column
+                    self.col + cursor_column,
                 );
             }
         }
@@ -656,25 +829,25 @@ impl WrbForm for TextArea {
             .cloned()
             .expect("FATAL: no `row`")
             .expect_u128()?;
-        
+
         let col = text_tuple
             .get("col")
             .cloned()
             .expect("FATAL: no `col`")
             .expect_u128()?;
-        
+
         let num_rows = text_tuple
             .get("num-rows")
             .cloned()
             .expect("FATAL: no `num-rows`")
             .expect_u128()?;
-        
+
         let num_cols = text_tuple
             .get("num-cols")
             .cloned()
             .expect("FATAL: no `num-cols`")
             .expect_u128()?;
-        
+
         let max_len = text_tuple
             .get("max-len")
             .cloned()
@@ -696,7 +869,7 @@ impl WrbForm for TextArea {
             .expect_u128()?
             // trunate
             &0xffffffffu128;
-        
+
         let focused_bg_color_u128 = text_tuple
             .get("focused-bg-color")
             .cloned()
@@ -704,7 +877,7 @@ impl WrbForm for TextArea {
             .expect_u128()?
             // truncate
             & 0xffffffffu128;
-        
+
         let focused_fg_color_u128 = text_tuple
             .get("focused-fg-color")
             .cloned()
@@ -712,26 +885,33 @@ impl WrbForm for TextArea {
             .expect_u128()?
             // trunate
             &0xffffffffu128;
-        
+
         let element_id = text_tuple
             .get("element-id")
             .cloned()
             .expect("FATAL: no `element-id`")
             .expect_u128()?;
 
-        let bg_color : Color = u32::try_from(bg_color_u128).expect("infallible").into();
-        let fg_color : Color = u32::try_from(fg_color_u128).expect("infallible").into();
-        let focused_bg_color : Color = u32::try_from(focused_bg_color_u128).expect("infallible").into();
-        let focused_fg_color : Color = u32::try_from(focused_fg_color_u128).expect("infallible").into();
+        let bg_color: Color = u32::try_from(bg_color_u128).expect("infallible").into();
+        let fg_color: Color = u32::try_from(fg_color_u128).expect("infallible").into();
+        let focused_bg_color: Color = u32::try_from(focused_bg_color_u128)
+            .expect("infallible")
+            .into();
+        let focused_fg_color: Color = u32::try_from(focused_fg_color_u128)
+            .expect("infallible")
+            .into();
 
         Ok(TextArea {
             element_id,
             viewport_id,
             row: u64::try_from(row).map_err(|_| Error::Codec("row too big".into()))?,
             col: u64::try_from(col).map_err(|_| Error::Codec("col too big".into()))?,
-            num_rows: u64::try_from(num_rows).map_err(|_| Error::Codec("num-rows too big".into()))?,
-            num_cols: u64::try_from(num_cols).map_err(|_| Error::Codec("num-cols too big".into()))?,
-            max_len: usize::try_from(max_len).map_err(|_| Error::Codec("max-len too big".into()))?,
+            num_rows: u64::try_from(num_rows)
+                .map_err(|_| Error::Codec("num-rows too big".into()))?,
+            num_cols: u64::try_from(num_cols)
+                .map_err(|_| Error::Codec("num-cols too big".into()))?,
+            max_len: usize::try_from(max_len)
+                .map_err(|_| Error::Codec("max-len too big".into()))?,
             bg_color,
             fg_color,
             focused_bg_color,
@@ -755,108 +935,170 @@ impl WrbForm for TextArea {
         };
         let bg_color = if focused {
             self.focused_bg_color.clone()
-        }
-        else {
+        } else {
             self.bg_color.clone()
         };
         let fg_color = if focused {
             self.focused_fg_color.clone()
-        }
-        else {
+        } else {
             self.fg_color.clone()
         };
 
-        let new_cursor = viewport.print_at_iter(self.element_id, self.row, self.col, bg_color, fg_color, self.inner_text.iter_at_offset(usize::try_from(self.num_cols).unwrap_or(usize::MAX), self.scroll));
+        let new_cursor = viewport.print_at_iter(
+            self.element_id,
+            self.row,
+            self.col,
+            bg_color,
+            fg_color,
+            self.inner_text.iter_at_offset(
+                usize::try_from(self.num_rows).unwrap_or(usize::MAX),
+                usize::try_from(self.num_cols).unwrap_or(usize::MAX),
+                self.scroll,
+            ),
+        );
+
         if focused {
-            if let Some((cursor_row, cursor_column)) = self.inner_text.cursor_location(u64::try_from(self.scroll).unwrap_or(u64::MAX), self.num_rows, self.num_cols) {
+            if let Some((cursor_row, cursor_column)) = self.inner_text.cursor_location(
+                u64::try_from(self.scroll).unwrap_or(u64::MAX),
+                self.num_rows,
+                self.num_cols,
+            ) {
                 root.set_form_cursor(
                     self.viewport_id,
                     self.row + cursor_row,
-                    self.col + cursor_column
+                    self.col + cursor_column,
                 );
             }
         }
 
         Ok(new_cursor)
     }
-    
+
     /// This doesn't generate an event the main loop cares about, but it does update the text
     /// buffer.
-    fn handle_event(&mut self, root: &mut Root, event: WrbFormEvent) -> Result<Option<Value>, Error> {
+    fn handle_event(
+        &mut self,
+        root: &mut Root,
+        event: WrbFormEvent,
+    ) -> Result<Option<Value>, Error> {
         match event {
-            WrbFormEvent::Keypress(key) => {
-                match key {
-                    Key::Left => {
-                        self.inner_text.left();
-                        self.cursor_col = self.inner_text.cursor.saturating_sub(self.inner_text.line_start);
-                        if self.inner_text.cursor < self.scroll {
-                            self.scroll = self.inner_text.find_line_start();
-                        }
+            WrbFormEvent::Keypress(key) => match key {
+                Key::Left => {
+                    self.inner_text.left();
+                    self.cursor_col = self
+                        .inner_text
+                        .cursor
+                        .saturating_sub(self.inner_text.line_start);
+                    if self.inner_text.cursor < self.scroll {
+                        self.scroll = self.inner_text.find_line_start();
                     }
-                    Key::Right => {
-                        self.inner_text.right();
-                        self.cursor_col = self.inner_text.cursor.saturating_sub(self.inner_text.line_start);
-                        if self.inner_text.cursor >= self.inner_text.end_of_area(u64::try_from(self.scroll).unwrap_or(u64::MAX), self.num_rows, self.num_cols) {
-                            self.scroll = self.inner_text.start_of_area(self.num_rows, self.num_cols);
-                        }
-                    }
-                    Key::Up => {
-                        self.inner_text.up(self.cursor_col);
-                        if self.inner_text.cursor < self.scroll {
-                            self.scroll = self.inner_text.find_line_start();
-                        }
-                    }
-                    Key::Down => {
-                        self.inner_text.down(self.cursor_col);
-                        if self.inner_text.cursor >= self.inner_text.end_of_area(u64::try_from(self.scroll).unwrap_or(u64::MAX), self.num_rows, self.num_cols) {
-                            self.scroll = self.inner_text.start_of_area(self.num_rows, self.num_cols);
-                        }
-                    }
-                    Key::Backspace | Key::Ctrl('h') => {
-                        self.inner_text.backspace();
-                        if self.inner_text.cursor < self.scroll {
-                            self.scroll = self.inner_text.find_line_start();
-                        }
-                    }
-                    Key::Delete | Key::Ctrl('?') => {
-                        self.inner_text.delete();
-                        if self.inner_text.cursor < self.scroll {
-                            self.scroll = self.inner_text.find_line_start();
-                        }
-                    }
-                    Key::Insert => {
-                        self.insert = !self.insert;
-                    }
-                    Key::Home => {
-                        self.inner_text.line_start();
-                        if self.inner_text.cursor < self.scroll {
-                            self.scroll = self.inner_text.find_line_start();
-                        }
-                    }
-                    Key::End => {
-                        self.inner_text.line_end();
-                        if self.inner_text.cursor >= self.inner_text.end_of_area(u64::try_from(self.scroll).unwrap_or(u64::MAX), self.num_rows, self.num_cols) {
-                            self.scroll = self.inner_text.start_of_area(self.num_rows, self.num_cols);
-                        }
-                    }
-                    Key::Char(c) => {
-                        if self.insert {
-                            self.inner_text.insert(c);
-                        }
-                        else {
-                            self.inner_text.overwrite(c);
-                        }
-                        if self.inner_text.cursor >= self.inner_text.end_of_area(u64::try_from(self.scroll).unwrap_or(u64::MAX), self.num_rows, self.num_cols) {
-                            self.scroll = self.inner_text.start_of_area(self.num_rows, self.num_cols);
-                        }
-                    }
-                    _ => {}
+                    wrb_debug!("left: cursor_col = {}", &self.cursor_col);
                 }
-            }
+                Key::Right => {
+                    self.inner_text.right();
+                    self.cursor_col = self
+                        .inner_text
+                        .cursor
+                        .saturating_sub(self.inner_text.line_start);
+                    if self.inner_text.cursor
+                        >= self.inner_text.end_of_area(
+                            u64::try_from(self.scroll).unwrap_or(u64::MAX),
+                            self.num_rows,
+                            self.num_cols,
+                        )
+                    {
+                        self.scroll = self.inner_text.start_of_area(
+                            u64::try_from(self.scroll).unwrap_or(u64::MAX),
+                            self.num_rows,
+                            self.num_cols,
+                        );
+                    }
+                    wrb_debug!("right: cursor_col = {}", &self.cursor_col);
+                }
+                Key::Up => {
+                    self.inner_text.up(self.cursor_col);
+                    if self.inner_text.cursor < self.scroll {
+                        self.scroll = self.inner_text.find_line_start();
+                    }
+                }
+                Key::Down => {
+                    self.inner_text.down(self.cursor_col);
+                    if self.inner_text.cursor
+                        >= self.inner_text.end_of_area(
+                            u64::try_from(self.scroll).unwrap_or(u64::MAX),
+                            self.num_rows,
+                            self.num_cols,
+                        )
+                    {
+                        self.scroll = self.inner_text.start_of_area(
+                            u64::try_from(self.scroll).unwrap_or(u64::MAX),
+                            self.num_rows,
+                            self.num_cols,
+                        );
+                    }
+                }
+                Key::Backspace | Key::Ctrl('h') => {
+                    self.inner_text.backspace();
+                    if self.inner_text.cursor < self.scroll {
+                        self.scroll = self.inner_text.find_line_start();
+                    }
+                }
+                Key::Delete | Key::Ctrl('?') => {
+                    self.inner_text.delete();
+                    if self.inner_text.cursor < self.scroll {
+                        self.scroll = self.inner_text.find_line_start();
+                    }
+                }
+                Key::Insert => {
+                    self.insert = !self.insert;
+                }
+                Key::Home => {
+                    self.inner_text.line_start();
+                    if self.inner_text.cursor < self.scroll {
+                        self.scroll = self.inner_text.find_line_start();
+                    }
+                }
+                Key::End => {
+                    self.inner_text.line_end();
+                    if self.inner_text.cursor
+                        >= self.inner_text.end_of_area(
+                            u64::try_from(self.scroll).unwrap_or(u64::MAX),
+                            self.num_rows,
+                            self.num_cols,
+                        )
+                    {
+                        self.scroll = self.inner_text.start_of_area(
+                            u64::try_from(self.scroll).unwrap_or(u64::MAX),
+                            self.num_rows,
+                            self.num_cols,
+                        );
+                    }
+                }
+                Key::Char(c) => {
+                    if self.insert {
+                        self.inner_text.insert(c);
+                    } else {
+                        self.inner_text.overwrite(c);
+                    }
+                    if self.inner_text.cursor
+                        >= self.inner_text.end_of_area(
+                            u64::try_from(self.scroll).unwrap_or(u64::MAX),
+                            self.num_rows,
+                            self.num_cols,
+                        )
+                    {
+                        self.scroll = self.inner_text.start_of_area(
+                            u64::try_from(self.scroll).unwrap_or(u64::MAX),
+                            self.num_rows,
+                            self.num_cols,
+                        );
+                    }
+                }
+                _ => {}
+            },
         }
         // update cursor
         self.focus(root, root.is_focused(self.element_id))?;
         Ok(None)
     }
 }
-

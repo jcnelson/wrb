@@ -88,7 +88,12 @@ impl Scanline {
                     cur_fg_color = None;
                     cur_bg_color = None;
                 }
-                CharCell::Fill { element_id: _element_id, fg, bg, value } => {
+                CharCell::Fill {
+                    element_id: _element_id,
+                    fg,
+                    bg,
+                    value,
+                } => {
                     if in_blank {
                         finish_string(&mut cur_str, &mut cmds);
                         in_blank = false;
@@ -173,10 +178,7 @@ impl Scanline {
     /// Translate a scanline command into just text
     pub fn into_text(self) -> String {
         match self {
-            Self::FgColor(..)
-            | Self::BgColor(..)
-            | Self::ClearLine
-            | Self::ResetColor => "".into(),
+            Self::FgColor(..) | Self::BgColor(..) | Self::ClearLine | Self::ResetColor => "".into(),
             Self::Text(s) => s,
             Self::Newline => "\n".into(),
         }

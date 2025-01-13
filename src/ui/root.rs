@@ -17,16 +17,16 @@
 
 use termion::event::Key;
 
-use std::collections::HashSet;
-use std::collections::HashMap;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::ui::charbuff::CharBuff;
 use crate::ui::charbuff::CharCell;
-use crate::ui::viewport::Viewport;
-use crate::ui::Error;
 use crate::ui::forms::WrbForm;
 use crate::ui::forms::WrbFormEvent;
+use crate::ui::viewport::Viewport;
+use crate::ui::Error;
 
 use clarity::vm::Value;
 
@@ -48,7 +48,7 @@ pub struct SceneGraph {
     hierarchy: Vec<Vec<u128>>,
     /// viewport absolute coordinate offsets.
     /// This + viewport.pos() = root coords
-    coord_offsets: HashMap<u128, (u64, u64)>
+    coord_offsets: HashMap<u128, (u64, u64)>,
 }
 
 impl SceneGraph {
@@ -57,7 +57,7 @@ impl SceneGraph {
         for (i, vp) in viewports.iter().enumerate() {
             viewport_table.insert(vp.id, i);
         }
-            
+
         let mut tree = HashMap::new();
         for vp in viewports.iter() {
             let Some(parent_id) = vp.parent else {
@@ -82,20 +82,34 @@ impl SceneGraph {
             let mut id = vp.id;
             let mut depth = 0;
             while let Some(Some(parent_index)) = tree.get(&id).as_ref() {
-                let parent = viewports.get(*parent_index).expect("BUG: incorrectly-constructed scenegraph tree");
+                let parent = viewports
+                    .get(*parent_index)
+                    .expect("BUG: incorrectly-constructed scenegraph tree");
                 if let Some((offset_row, offset_col)) = coord_offsets.get(&parent.id) {
                     // already processed this parent, so we can process this child
-                    wrb_test_debug!("parent of viewport {} is processed -- at offset ({},{})", id, offset_row, offset_col);
+                    wrb_test_debug!(
+                        "parent of viewport {} is processed -- at offset ({},{})",
+                        id,
+                        offset_row,
+                        offset_col
+                    );
                     row += offset_row;
                     col += offset_col;
-                    let parent_depth = depths.get(parent_index).expect("BUG: parent has cursor but no depth");
+                    let parent_depth = depths
+                        .get(parent_index)
+                        .expect("BUG: parent has cursor but no depth");
                     depth = parent_depth + 1;
                     break;
                 }
 
                 // have not processed the parent.
                 let (parent_row, parent_col) = parent.pos();
-                wrb_test_debug!("parent of viewport {} is NOT processed -- at offset ({},{})", id, parent_row, parent_col);
+                wrb_test_debug!(
+                    "parent of viewport {} is NOT processed -- at offset ({},{})",
+                    id,
+                    parent_row,
+                    parent_col
+                );
                 row += parent_row;
                 col += parent_col;
                 id = parent.id;
@@ -106,16 +120,18 @@ impl SceneGraph {
             depths.insert(i, depth);
             max_depth = max_depth.max(depth);
         }
-        
+
         wrb_test_debug!("depths = {:?}", &depths);
         wrb_test_debug!("coord_offsets = {:?}", &coord_offsets);
 
         let mut hierarchy = vec![vec![]; max_depth + 1];
         for (vp_idx, depth) in depths.into_iter() {
-            let vp = viewports.get(vp_idx).expect("BUG: incorrectly-constructed viewport table");
+            let vp = viewports
+                .get(vp_idx)
+                .expect("BUG: incorrectly-constructed viewport table");
             hierarchy[depth].push(vp.id);
         }
-        
+
         wrb_test_debug!("hierarchy = {:?}", &hierarchy);
 
         SceneGraph {
@@ -130,7 +146,8 @@ impl SceneGraph {
     /// Translate the viewport-relative (row,col) cursor into the root-level absolute (row,col)
     /// cursor
     pub fn abs_coords(&self, viewport_id: u128, rel_row: u64, rel_col: u64) -> Option<(u64, u64)> {
-        self.coord_offsets.get(&viewport_id)
+        self.coord_offsets
+            .get(&viewport_id)
             .map(|(offset_row, offset_col)| (offset_row + rel_row, offset_col + rel_col))
     }
 
@@ -153,7 +170,11 @@ impl SceneGraph {
                 };
                 let (vp_rows, vp_cols) = vp.dims();
 
-                if *offset_row <= row && row < *offset_row + vp_rows && *offset_col <= col && col < *offset_col + vp_cols {
+                if *offset_row <= row
+                    && row < *offset_row + vp_rows
+                    && *offset_col <= col
+                    && col < *offset_col + vp_cols
+                {
                     return Some(*viewport_id);
                 }
             }
@@ -241,10 +262,10 @@ impl Root {
         let mut zbuff = Vec::with_capacity((self.num_rows * self.num_cols) as usize);
         for r in 0..self.num_rows {
             for c in 0..self.num_cols {
-                let zbuff_entry = if let Some(viewport_id) = self.scenegraph.viewport_at(r, c, true) {
+                let zbuff_entry = if let Some(viewport_id) = self.scenegraph.viewport_at(r, c, true)
+                {
                     ZBuffEntry::Viewport(viewport_id)
-                }
-                else {
+                } else {
                     ZBuffEntry::Root
                 };
                 zbuff.push(zbuff_entry);
@@ -290,7 +311,12 @@ impl Root {
 
                 let (pos_row, pos_col) = viewport.pos();
                 let charcell = viewport
-                    .translate_coordinate(viewport_row.saturating_sub(pos_row), viewport_col.saturating_sub(pos_col), row, col)
+                    .translate_coordinate(
+                        viewport_row.saturating_sub(pos_row),
+                        viewport_col.saturating_sub(pos_col),
+                        row,
+                        col,
+                    )
                     .map(|(rel_row, rel_col)| viewport.charcell_at(rel_row, rel_col))
                     .flatten()
                     .unwrap_or(CharCell::Blank);
@@ -306,12 +332,19 @@ impl Root {
     }
 
     /// Set and compute all forms
-    pub fn set_all_forms(&mut self, static_ui_contents: Vec<Box<dyn WrbForm>>, dynamic_ui_contents: Vec<Box<dyn WrbForm>>) -> Result<(), Error> {
+    pub fn set_all_forms(
+        &mut self,
+        static_ui_contents: Vec<Box<dyn WrbForm>>,
+        dynamic_ui_contents: Vec<Box<dyn WrbForm>>,
+    ) -> Result<(), Error> {
         let mut viewport_cursors = HashMap::new();
         let mut forms = HashMap::new();
         for mut ui_content in static_ui_contents.into_iter() {
             let viewport_id = ui_content.viewport_id();
-            let cursor = viewport_cursors.get(&viewport_id).cloned().unwrap_or((0, 0));
+            let cursor = viewport_cursors
+                .get(&viewport_id)
+                .cloned()
+                .unwrap_or((0, 0));
 
             wrb_debug!("Create and render static form {}", ui_content.element_id());
             let new_cursor = ui_content.render(self, cursor)?;
@@ -321,8 +354,11 @@ impl Root {
         let mut dynamic_form_ids = HashSet::new();
         for mut ui_content in dynamic_ui_contents.into_iter() {
             let viewport_id = ui_content.viewport_id();
-            let cursor = viewport_cursors.get(&viewport_id).cloned().unwrap_or((0, 0));
-            
+            let cursor = viewport_cursors
+                .get(&viewport_id)
+                .cloned()
+                .unwrap_or((0, 0));
+
             wrb_debug!("Create and render dynamic form {}", ui_content.element_id());
             let new_cursor = ui_content.render(self, cursor)?;
             viewport_cursors.insert(viewport_id, new_cursor);
@@ -343,7 +379,7 @@ impl Root {
         for (_element_id, ui_content) in forms.iter_mut() {
             let viewport_id = ui_content.viewport_id();
             let cursor = viewport_cursors.remove(&viewport_id).unwrap_or((0, 0));
-            
+
             wrb_debug!("Redraw form {}", _element_id);
             let new_cursor = ui_content.render(self, cursor)?;
             viewport_cursors.insert(viewport_id, new_cursor);
@@ -352,12 +388,12 @@ impl Root {
         self.forms = forms;
         Ok(())
     }
-   
+
     /// Update from a FrameUpdate
     pub fn update_forms(&mut self, frame_update: FrameUpdate) -> Result<(), Error> {
         let mut viewport_cursors = HashMap::new();
         let mut forms = std::mem::replace(&mut self.forms, HashMap::new());
-        
+
         // remove old forms
         let old_forms = std::mem::replace(&mut self.dynamic_forms, HashSet::new());
         for old_form_id in old_forms.into_iter() {
@@ -367,7 +403,10 @@ impl Root {
         // redraw static forms and re-compute their cursors
         for (_element_id, ui_content) in forms.iter_mut() {
             let viewport_id = ui_content.viewport_id();
-            let cursor = viewport_cursors.get(&viewport_id).cloned().unwrap_or((0, 0));
+            let cursor = viewport_cursors
+                .get(&viewport_id)
+                .cloned()
+                .unwrap_or((0, 0));
 
             wrb_debug!("Render existing form {}", _element_id);
             let new_cursor = ui_content.render(self, cursor)?;
@@ -379,8 +418,11 @@ impl Root {
         for mut ui_content in frame_update.new_contents.into_iter() {
             let element_id = ui_content.element_id();
             let viewport_id = ui_content.viewport_id();
-            let cursor = viewport_cursors.get(&viewport_id).cloned().unwrap_or((0, 0));
-            
+            let cursor = viewport_cursors
+                .get(&viewport_id)
+                .cloned()
+                .unwrap_or((0, 0));
+
             wrb_debug!("Render new form {}", element_id);
             let new_cursor = ui_content.render(self, cursor)?;
             viewport_cursors.insert(viewport_id, new_cursor);
@@ -392,12 +434,10 @@ impl Root {
         let focused = if let Some(focused) = self.focused.take() {
             if forms.get(&focused).is_none() {
                 None
-            }
-            else {
+            } else {
                 Some(focused)
             }
-        }
-        else {
+        } else {
             None
         };
 
@@ -428,7 +468,7 @@ impl Root {
         };
         self.scenegraph.viewports.get_mut(*idx)
     }
-    
+
     /// ref viewports
     pub fn viewports(&self) -> &[Viewport] {
         &self.scenegraph.viewports
@@ -446,7 +486,7 @@ impl Root {
         };
         match pt {
             ZBuffEntry::Viewport(id) => Some(*id),
-            ZBuffEntry::Root => None
+            ZBuffEntry::Root => None,
         }
     }
 
@@ -455,7 +495,13 @@ impl Root {
         let mut cur_ui_element = None;
         let mut element_ids = vec![];
         for cell in buff.cells.iter() {
-            let CharCell::Fill { value: _value, bg: _bg, fg: _fg, element_id } = cell else {
+            let CharCell::Fill {
+                value: _value,
+                bg: _bg,
+                fg: _fg,
+                element_id,
+            } = cell
+            else {
                 continue;
             };
             let Some(form) = self.forms.get(element_id) else {
@@ -469,8 +515,7 @@ impl Root {
                     element_ids.push(*element_id);
                     *cur_ui_element = *element_id;
                 }
-            }
-            else {
+            } else {
                 element_ids.push(*element_id);
                 cur_ui_element = Some(*element_id);
             }
@@ -484,7 +529,7 @@ impl Root {
 
         let mut focus_order = HashMap::new();
         for i in 0..(element_ids.len() - 1) {
-            focus_order.insert(element_ids[i], element_ids[i+1]);
+            focus_order.insert(element_ids[i], element_ids[i + 1]);
         }
         focus_order.insert(element_ids[element_ids.len() - 1], element_ids[0]);
         self.focus_order = focus_order;
@@ -497,8 +542,7 @@ impl Root {
         if let Some(focused) = self.focused {
             let next_focused = self.focus_order.get(&focused).cloned();
             self.focused = next_focused;
-        }
-        else {
+        } else {
             self.focused = self.focus_first.clone();
         }
         if let Some(old_focused) = old_focused {
@@ -535,14 +579,14 @@ impl Root {
     pub fn is_focusable(&self, element_id: u128) -> bool {
         self.focus_order.contains_key(&element_id)
     }
-    
+
     /// Handle a form event. Pass it to the focused form.
     pub fn handle_event(&mut self, event: WrbFormEvent) -> Result<Option<Value>, Error> {
         let Some(focused) = self.focused else {
             wrb_debug!("No form focused; dropping event {:?}", &event);
             return Ok(None);
         };
-        
+
         // take ownership to avoid multiple mutable references
         let Some(mut form) = self.forms.remove(&focused) else {
             wrb_debug!("No such form {}; dropping event {:?}", focused, &event);
@@ -558,17 +602,32 @@ impl Root {
     }
 
     /// resolve a row/column within a form to the absolute row/column
-    fn form_cursor_to_root_cursor(&self, form_viewport_id: u128, form_cursor_row: u64, form_cursor_col: u64) -> Option<(u64, u64)> {
-        let Some((viewport_row, viewport_col)) = self.scenegraph.viewport_coords(form_viewport_id) else {
+    fn form_cursor_to_root_cursor(
+        &self,
+        form_viewport_id: u128,
+        form_cursor_row: u64,
+        form_cursor_col: u64,
+    ) -> Option<(u64, u64)> {
+        let Some((viewport_row, viewport_col)) = self.scenegraph.viewport_coords(form_viewport_id)
+        else {
             return None;
         };
 
-        Some((viewport_row + form_cursor_row, viewport_col + form_cursor_col))
+        Some((
+            viewport_row + form_cursor_row,
+            viewport_col + form_cursor_col,
+        ))
     }
 
     /// Set the cursor, but relative to a form
-    pub fn set_form_cursor(&mut self, form_element_id: u128, form_cursor_row: u64, form_cursor_col: u64) {
-        let abs_coord = self.form_cursor_to_root_cursor(form_element_id, form_cursor_row, form_cursor_col);
+    pub fn set_form_cursor(
+        &mut self,
+        form_element_id: u128,
+        form_cursor_row: u64,
+        form_cursor_col: u64,
+    ) {
+        let abs_coord =
+            self.form_cursor_to_root_cursor(form_element_id, form_cursor_row, form_cursor_col);
         self.cursor = abs_coord;
     }
 
@@ -576,7 +635,7 @@ impl Root {
     pub fn keycode_enter(&self) -> Key {
         Key::Char('\n')
     }
-    
+
     /// What is the "space" keycode?
     pub fn keycode_space(&self) -> Key {
         Key::Char(' ')
@@ -586,7 +645,7 @@ impl Root {
     pub fn keycode_up(&self) -> Key {
         Key::Up
     }
-    
+
     /// What is the "down" keycode?
     pub fn keycode_down(&self) -> Key {
         Key::Down

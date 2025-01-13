@@ -28,12 +28,12 @@ use stacks_common::types::chainstate::StacksBlockId;
 use stacks_common::types::StacksEpochId;
 
 use clarity::boot_util::boot_code_addr;
+use clarity::vm::errors::Error as clarity_error;
 use clarity::vm::types::QualifiedContractIdentifier;
 use clarity::vm::ContractName;
-use clarity::vm::errors::Error as clarity_error;
 
-use crate::vm::storage::WrbDB;
 use crate::vm::storage::Error as DBError;
+use crate::vm::storage::WrbDB;
 
 pub const STACKS_WRB_EPOCH: StacksEpochId = StacksEpochId::Epoch24;
 
@@ -42,7 +42,7 @@ pub mod contracts;
 pub mod special;
 pub mod storage;
 
-pub use contracts::{WRBLIB_CODE, BOOT_CODE, WRB_CONTRACT, WRB_LOW_LEVEL_CONTRACT};
+pub use contracts::{BOOT_CODE, WRBLIB_CODE, WRB_CONTRACT, WRB_LOW_LEVEL_CONTRACT};
 
 #[cfg(test)]
 pub mod tests;

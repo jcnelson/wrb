@@ -25,13 +25,13 @@ use crate::vm::storage::util::*;
 
 use clarity::vm::database::HeadersDB;
 
-use stacks_common::types::StacksEpochId;
 use stacks_common::types::chainstate::BlockHeaderHash;
 use stacks_common::types::chainstate::BurnchainHeaderHash;
 use stacks_common::types::chainstate::ConsensusHash;
 use stacks_common::types::chainstate::StacksAddress;
 use stacks_common::types::chainstate::StacksBlockId;
 use stacks_common::types::chainstate::VRFSeed;
+use stacks_common::types::StacksEpochId;
 use stacks_common::util::hash::{Hash160, Sha512Trunc256Sum};
 
 use stacks_common::util::get_epoch_time_secs;
@@ -55,7 +55,11 @@ impl HeadersDB for WrbHeadersDB {
         }
     }
 
-    fn get_consensus_hash_for_block(&self, id_bhh: &StacksBlockId, _epoch_id: &StacksEpochId) -> Option<ConsensusHash> {
+    fn get_consensus_hash_for_block(
+        &self,
+        id_bhh: &StacksBlockId,
+        _epoch_id: &StacksEpochId,
+    ) -> Option<ConsensusHash> {
         // mock it
         let conn = self.conn();
         if let Some(height) = get_wrb_block_height(&conn, id_bhh) {
@@ -67,7 +71,11 @@ impl HeadersDB for WrbHeadersDB {
         }
     }
 
-    fn get_vrf_seed_for_block(&self, id_bhh: &StacksBlockId, _epoch_id: &StacksEpochId) -> Option<VRFSeed> {
+    fn get_vrf_seed_for_block(
+        &self,
+        id_bhh: &StacksBlockId,
+        _epoch_id: &StacksEpochId,
+    ) -> Option<VRFSeed> {
         let conn = self.conn();
         if let Some(height) = get_wrb_block_height(&conn, id_bhh) {
             let mut bytes = [0u8; 32];
@@ -93,7 +101,11 @@ impl HeadersDB for WrbHeadersDB {
         }
     }
 
-    fn get_burn_block_time_for_block(&self, id_bhh: &StacksBlockId, _epoch_id: Option<&StacksEpochId>) -> Option<u64> {
+    fn get_burn_block_time_for_block(
+        &self,
+        id_bhh: &StacksBlockId,
+        _epoch_id: Option<&StacksEpochId>,
+    ) -> Option<u64> {
         let conn = self.conn();
         if let Some(height) = get_wrb_block_height(&conn, id_bhh) {
             Some(height)
@@ -101,7 +113,7 @@ impl HeadersDB for WrbHeadersDB {
             None
         }
     }
-    
+
     fn get_stacks_block_time_for_block(&self, id_bhh: &StacksBlockId) -> Option<u64> {
         let conn = self.conn();
         if let Some(height) = get_wrb_block_height(&conn, id_bhh) {
@@ -110,8 +122,12 @@ impl HeadersDB for WrbHeadersDB {
             None
         }
     }
-    
-    fn get_stacks_height_for_tenure_height(&self, _id_bhh: &StacksBlockId, tenure_height: u32) -> Option<u32> {
+
+    fn get_stacks_height_for_tenure_height(
+        &self,
+        _id_bhh: &StacksBlockId,
+        tenure_height: u32,
+    ) -> Option<u32> {
         Some(tenure_height)
     }
 
@@ -124,21 +140,37 @@ impl HeadersDB for WrbHeadersDB {
         }
     }
 
-    fn get_miner_address(&self, _id_bhh: &StacksBlockId, _epoch_id: &StacksEpochId) -> Option<StacksAddress> {
+    fn get_miner_address(
+        &self,
+        _id_bhh: &StacksBlockId,
+        _epoch_id: &StacksEpochId,
+    ) -> Option<StacksAddress> {
         None
     }
 
-    fn get_burnchain_tokens_spent_for_block(&self, id_bhh: &StacksBlockId, _epoch_id: &StacksEpochId) -> Option<u128> {
+    fn get_burnchain_tokens_spent_for_block(
+        &self,
+        id_bhh: &StacksBlockId,
+        _epoch_id: &StacksEpochId,
+    ) -> Option<u128> {
         // if the block is defined at all, then return a constant
         get_wrb_block_height(&self.conn(), id_bhh).map(|_| 1)
     }
 
-    fn get_burnchain_tokens_spent_for_winning_block(&self, id_bhh: &StacksBlockId, _epoch_id: &StacksEpochId) -> Option<u128> {
+    fn get_burnchain_tokens_spent_for_winning_block(
+        &self,
+        id_bhh: &StacksBlockId,
+        _epoch_id: &StacksEpochId,
+    ) -> Option<u128> {
         // if the block is defined at all, then return a constant
         get_wrb_block_height(&self.conn(), id_bhh).map(|_| 1)
     }
 
-    fn get_tokens_earned_for_block(&self, id_bhh: &StacksBlockId, _epoch_id: &StacksEpochId) -> Option<u128> {
+    fn get_tokens_earned_for_block(
+        &self,
+        id_bhh: &StacksBlockId,
+        _epoch_id: &StacksEpochId,
+    ) -> Option<u128> {
         // if the block is defined at all, then return a constant
         get_wrb_block_height(&self.conn(), id_bhh).map(|_| 1)
     }

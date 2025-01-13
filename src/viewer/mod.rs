@@ -15,18 +15,18 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::io::{Write, stdout, stdin, Stdin, Stdout, Error as IOError};
-use std::thread;
-use std::thread::JoinHandle;
-use std::sync::mpsc::channel;
-use std::sync::mpsc::Sender;
-use std::sync::mpsc::Receiver;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::fs;
 use std::io;
 use std::io::Read;
+use std::io::{stdin, stdout, Error as IOError, Stdin, Stdout, Write};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::channel;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
+use std::sync::Arc;
+use std::thread;
+use std::thread::JoinHandle;
 
 use termion::async_stdin;
 use termion::event::Key;
@@ -34,15 +34,15 @@ use termion::input::TermRead;
 use termion::raw::IntoRawMode;
 use termion::screen::IntoAlternateScreen;
 
-use crate::ui::root::Root;
-use crate::ui::root::FrameUpdate;
-use crate::ui::Renderer;
-use crate::ui::events::WrbUIEventChannels;
-use crate::ui::events::WrbFrameData;
-use crate::ui::forms::WrbFormEvent;
 use crate::ui::events::WrbEvent;
+use crate::ui::events::WrbFrameData;
+use crate::ui::events::WrbUIEventChannels;
+use crate::ui::forms::WrbFormEvent;
+use crate::ui::root::FrameUpdate;
+use crate::ui::root::Root;
 use crate::ui::scanline::Scanline;
 use crate::ui::Error as UIError;
+use crate::ui::Renderer;
 
 pub mod status;
 
@@ -57,7 +57,7 @@ pub enum ViewerFocus {
     /// focus is on the status widget
     Status,
     /// focus is somewhere in the root
-    Root
+    Root,
 }
 
 #[derive(Clone, Debug)]
@@ -88,7 +88,7 @@ pub struct Viewer {
 pub enum Error {
     IO(IOError),
     UI(UIError),
-    Finished
+    Finished,
 }
 
 impl From<IOError> for Error {
@@ -118,22 +118,33 @@ impl Viewer {
 
     /// cursor goto
     fn goto_cursor(&self) -> String {
-        format!("{}", termion::cursor::Goto(self.cursor.0.saturating_add(1), self.cursor.1.saturating_add(1)))
+        format!(
+            "{}",
+            termion::cursor::Goto(
+                self.cursor.0.saturating_add(1),
+                self.cursor.1.saturating_add(1)
+            )
+        )
     }
 
     /// hide the cursor
     fn hide_cursor<W: Write>(&mut self, stdout: &mut W) -> Result<(), Error> {
-        write!(stdout, "{}{}", termion::cursor::Goto(1, 1), termion::cursor::Hide)?;
+        write!(
+            stdout,
+            "{}{}",
+            termion::cursor::Goto(1, 1),
+            termion::cursor::Hide
+        )?;
         self.cursor = (1, 1);
         Ok(())
     }
-    
+
     /// show the cursor
     fn show_cursor<W: Write>(&mut self, stdout: &mut W) -> Result<(), Error> {
         write!(stdout, "{}", termion::cursor::Show)?;
         Ok(())
     }
-    
+
     /// clear the whole screen
     fn clear_screen<W: Write>(&mut self, stdout: &mut W) -> Result<(), Error> {
         write!(stdout, "{}", termion::clear::All)?;
@@ -157,18 +168,21 @@ impl Viewer {
         self.hide_cursor(stdout)?;
         Ok(())
     }
-    
+
     /// status bar focus
     fn set_status_focus<W: Write>(&mut self, stdout: &mut W) -> Result<(), Error> {
         self.focus = ViewerFocus::Status;
         let status_row = if self.status.at_top() {
             1
-        }
-        else {
-            u16::try_from(self.size.0.saturating_sub(self.status.num_rows())).unwrap_or(u16::MAX - 1)
+        } else {
+            u16::try_from(self.size.0.saturating_sub(self.status.num_rows()))
+                .unwrap_or(u16::MAX - 1)
         };
 
-        self.cursor = (u16::try_from(self.status.cursor_column(true)).unwrap_or(u16::MAX - 1), status_row);
+        self.cursor = (
+            u16::try_from(self.status.cursor_column(true)).unwrap_or(u16::MAX - 1),
+            status_row,
+        );
         self.show_cursor(stdout)?;
         Ok(())
     }
@@ -176,23 +190,35 @@ impl Viewer {
     /// Set the quit flag and set quit status text
     fn set_quit(&mut self) {
         self.quit.store(true, Ordering::SeqCst);
-        self.status.set_text("Done! Press any key to exit".to_string());
+        self.status
+            .set_text("Done! Press any key to exit".to_string());
     }
 
-    fn update_focused_cursor<W: Write>(&mut self, frame: &mut Root, stdout: &mut W) -> Result<(), Error> {
+    fn update_focused_cursor<W: Write>(
+        &mut self,
+        frame: &mut Root,
+        stdout: &mut W,
+    ) -> Result<(), Error> {
         if let Some((cursor_row, cursor_col)) = frame.cursor {
-            self.cursor = (u16::try_from(cursor_col).unwrap_or(u16::MAX), u16::try_from(cursor_row).unwrap_or(u16::MAX));
+            self.cursor = (
+                u16::try_from(cursor_col).unwrap_or(u16::MAX),
+                u16::try_from(cursor_row).unwrap_or(u16::MAX),
+            );
             self.show_cursor(stdout)?;
-        }
-        else {
+        } else {
             self.hide_cursor(stdout)?;
         }
         Ok(())
     }
 
-    pub fn dispatch_keyboard_event<W: Write>(&mut self, key: Key, mut frame: Option<&mut Root>, stdout: &mut W) -> Result<(), Error> {
+    pub fn dispatch_keyboard_event<W: Write>(
+        &mut self,
+        key: Key,
+        mut frame: Option<&mut Root>,
+        stdout: &mut W,
+    ) -> Result<(), Error> {
         wrb_debug!("Got key in focus {:?}: {:?}", &self.focus, &key);
-        
+
         // if we have no frame, then focus reverts to the Status widget
         if frame.is_none() {
             self.focus = ViewerFocus::Status;
@@ -222,53 +248,52 @@ impl Viewer {
                     _ => {}
                 }
             }
-            ViewerFocus::Status => {
-                match key {
-                    Key::Esc => {
-                        self.set_no_focus(stdout)?;
+            ViewerFocus::Status => match key {
+                Key::Esc => {
+                    self.set_no_focus(stdout)?;
+                }
+                Key::Char('\t') => {
+                    self.focus = ViewerFocus::Root;
+                    if let Some(frame) = frame.as_mut() {
+                        frame.next_focus()?;
+                        self.update_focused_cursor(frame, stdout)?;
                     }
-                    Key::Char('\t') => {
-                        self.focus = ViewerFocus::Root;
-                        if let Some(frame) = frame.as_mut() {
-                            frame.next_focus()?;
-                            self.update_focused_cursor(frame, stdout)?;
-                        }
+                }
+                _ => {
+                    self.status.handle_event(WrbFormEvent::Keypress(key))?;
+                    self.set_status_focus(stdout)?;
+                }
+            },
+            ViewerFocus::Root => match key {
+                Key::Esc => {
+                    self.set_no_focus(stdout)?;
+                    if let Some(frame) = frame.as_mut() {
+                        frame.clear_focus()?;
+                        self.update_focused_cursor(frame, stdout)?;
                     }
-                    _ => {
-                        self.status.handle_event(WrbFormEvent::Keypress(key))?;
-                        self.set_status_focus(stdout)?;
+                }
+                Key::Char('\t') => {
+                    if let Some(frame) = frame.as_mut() {
+                        frame.next_focus()?;
+                        self.update_focused_cursor(frame, stdout)?;
+                    }
+                }
+                _ => {
+                    if let Some(frame) = frame.as_mut() {
+                        frame.handle_event(WrbFormEvent::Keypress(key))?;
+                        self.update_focused_cursor(frame, stdout)?;
                     }
                 }
             },
-            ViewerFocus::Root => {
-                match key {
-                    Key::Esc => {
-                        self.set_no_focus(stdout)?;
-                        if let Some(frame) = frame.as_mut() {
-                            frame.clear_focus()?;
-                            self.update_focused_cursor(frame, stdout)?;
-                        }
-                    }
-                    Key::Char('\t') => {
-                        if let Some(frame) = frame.as_mut() {
-                            frame.next_focus()?;
-                            self.update_focused_cursor(frame, stdout)?;
-                        }
-                    }
-                    _ => {
-                        if let Some(frame) = frame.as_mut() {
-                            frame.handle_event(WrbFormEvent::Keypress(key))?;
-                            self.update_focused_cursor(frame, stdout)?;
-                        }
-                    }
-                }
-            }
         }
         Ok(())
     }
 
     /// Keyboard reader thread
-    fn start_keyboard_thread(quit: Arc<AtomicBool>, key_sender: Sender<ViewerEvent>) -> JoinHandle<()> {
+    fn start_keyboard_thread(
+        quit: Arc<AtomicBool>,
+        key_sender: Sender<ViewerEvent>,
+    ) -> JoinHandle<()> {
         let stdin = stdin();
         let handle = thread::spawn(move || {
             for c in stdin.keys() {
@@ -287,7 +312,11 @@ impl Viewer {
     }
 
     /// Start frame thread
-    fn start_frame_thread(quit: Arc<AtomicBool>, frame_receiver: Receiver<WrbFrameData>, frame_sender: Sender<ViewerEvent>) -> JoinHandle<()> {
+    fn start_frame_thread(
+        quit: Arc<AtomicBool>,
+        frame_receiver: Receiver<WrbFrameData>,
+        frame_sender: Sender<ViewerEvent>,
+    ) -> JoinHandle<()> {
         let handle = thread::spawn(move || {
             while !quit.load(Ordering::SeqCst) {
                 let Ok(frame_data) = frame_receiver.recv() else {
@@ -312,33 +341,52 @@ impl Viewer {
 
     /// Render a frame. Saves it to last_frame
     fn render<W: Write>(&mut self, mut root: Root, screen: &mut W) -> Result<(), Error> {
-        let status_text = self.status.render(self.focus == ViewerFocus::Status, self.size.1);
+        let status_text = self
+            .status
+            .render(self.focus == ViewerFocus::Status, self.size.1);
         let (root_rows, _) = self.get_root_size(self.size.0, self.size.1);
         let root_text = {
             let chars = root.render();
             let scanlines = Scanline::compile_rows(&chars, 0, root_rows);
             Renderer::scanlines_into_term_string(scanlines)
         };
-        
+
         let root_cursor = root.cursor.clone();
         self.last_frame = Some(root);
 
         if self.status.at_top() {
-            write!(screen, "{}{}{}{}", termion::cursor::Goto(1, 1), &status_text, &root_text, &self.goto_cursor())?;
-        }
-        else {
-            let status_row = u16::try_from(self.size.0.saturating_sub(self.status.num_rows())).unwrap_or(u16::MAX - 1);
-            write!(screen, "{}{}{}{}{}", termion::cursor::Goto(1, 1), &root_text, termion::cursor::Goto(1, status_row + 1), &status_text, &self.goto_cursor())?;
+            write!(
+                screen,
+                "{}{}{}{}",
+                termion::cursor::Goto(1, 1),
+                &status_text,
+                &root_text,
+                &self.goto_cursor()
+            )?;
+        } else {
+            let status_row = u16::try_from(self.size.0.saturating_sub(self.status.num_rows()))
+                .unwrap_or(u16::MAX - 1);
+            write!(
+                screen,
+                "{}{}{}{}{}",
+                termion::cursor::Goto(1, 1),
+                &root_text,
+                termion::cursor::Goto(1, status_row + 1),
+                &status_text,
+                &self.goto_cursor()
+            )?;
         };
 
         if let Some((cursor_row, cursor_col)) = root_cursor {
-            self.cursor = (u16::try_from(cursor_col).unwrap_or(u16::MAX), u16::try_from(cursor_row).unwrap_or(u16::MAX));
+            self.cursor = (
+                u16::try_from(cursor_col).unwrap_or(u16::MAX),
+                u16::try_from(cursor_row).unwrap_or(u16::MAX),
+            );
             self.show_cursor(screen)?;
-        }
-        else {
+        } else {
             self.hide_cursor(screen)?;
         }
-       
+
         screen.flush()?;
         Ok(())
     }
@@ -358,7 +406,8 @@ impl Viewer {
         let (viewer_send, viewer_recv) = channel();
 
         let keyboard_thread = Self::start_keyboard_thread(self.quit.clone(), viewer_send.clone());
-        let frame_thread = Self::start_frame_thread(self.quit.clone(), frames_recv, viewer_send.clone());
+        let frame_thread =
+            Self::start_frame_thread(self.quit.clone(), frames_recv, viewer_send.clone());
 
         // request the page to be generated
         if events_send.send(WrbEvent::Open).is_err() {
@@ -371,7 +420,10 @@ impl Viewer {
             let sz = self.get_term_size()?;
             if sz != self.size {
                 let (root_rows, root_cols) = self.get_root_size(sz.0, sz.1);
-                if events_send.send(WrbEvent::Resize(root_rows, root_cols)).is_err() { 
+                if events_send
+                    .send(WrbEvent::Resize(root_rows, root_cols))
+                    .is_err()
+                {
                     self.set_quit();
                 }
 
@@ -396,13 +448,11 @@ impl Viewer {
                         if timer_thread.is_none() {
                             // begin sending wakeup events to the main loop
                             let event_sender = events_send.clone();
-                            timer_thread = Some(thread::spawn(move || {
-                                loop {
-                                    if event_sender.send(WrbEvent::Timer).is_err() {
-                                        break;
-                                    }
-                                    sleep_ms(frame_delay);
+                            timer_thread = Some(thread::spawn(move || loop {
+                                if event_sender.send(WrbEvent::Timer).is_err() {
+                                    break;
                                 }
+                                sleep_ms(frame_delay);
                             }));
                         }
                     }
@@ -436,4 +486,3 @@ impl Viewer {
         Ok(())
     }
 }
-

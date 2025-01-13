@@ -15,9 +15,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::fmt;
-use std::collections::HashMap;
 use clarity::vm::Value;
+use std::collections::HashMap;
+use std::fmt;
 
 use crate::ui::charbuff::CharBuff;
 use crate::ui::charbuff::CharCell;
@@ -44,12 +44,23 @@ pub struct Viewport {
     /// contents
     buff: CharBuff,
     /// upper-left corners of each UI element
-    element_coords: HashMap<u128, (u64, u64)>
+    element_coords: HashMap<u128, (u64, u64)>,
 }
 
 impl fmt::Debug for Viewport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Viewport({},({},{}),({},{}),scroll={},visible={},buff={})", self.id, self.start_row, self.start_col, self.start_row + self.num_rows, self.start_col + self.buff.num_cols, self.scroll_offset, self.visible, self.buff.cells.len())
+        write!(
+            f,
+            "Viewport({},({},{}),({},{}),scroll={},visible={},buff={})",
+            self.id,
+            self.start_row,
+            self.start_col,
+            self.start_row + self.num_rows,
+            self.start_col + self.buff.num_cols,
+            self.scroll_offset,
+            self.visible,
+            self.buff.cells.len()
+        )
     }
 }
 
@@ -71,7 +82,7 @@ impl Viewport {
                 .expect_u128()?,
         )
         .expect("too many rows");
-        
+
         let start_col = u64::try_from(
             viewport_tuple
                 .get("start-col")
@@ -89,7 +100,7 @@ impl Viewport {
                 .expect_u128()?,
         )
         .expect("too many rows");
-        
+
         let num_cols = u64::try_from(
             viewport_tuple
                 .get("num-cols")
@@ -131,7 +142,7 @@ impl Viewport {
             prev_viewport: last_opt,
             parent: parent_opt,
             buff: CharBuff::new(num_cols),
-            element_coords: HashMap::new()
+            element_coords: HashMap::new(),
         })
     }
 
@@ -149,8 +160,15 @@ impl Viewport {
             element_coords: HashMap::new(),
         }
     }
-    
-    pub fn new_child(id: u128, parent_id: u128, start_row: u64, start_col: u64, num_rows: u64, num_cols: u64) -> Viewport {
+
+    pub fn new_child(
+        id: u128,
+        parent_id: u128,
+        start_row: u64,
+        start_col: u64,
+        num_rows: u64,
+        num_cols: u64,
+    ) -> Viewport {
         Viewport {
             id,
             start_row,
@@ -180,9 +198,9 @@ impl Viewport {
         if let Some((r, c)) = self.element_coords.get_mut(&element_id) {
             *r = (*r).min(start_row);
             *c = (*c).min(start_col);
-        }
-        else {
-            self.element_coords.insert(element_id, (start_row, start_col));
+        } else {
+            self.element_coords
+                .insert(element_id, (start_row, start_col));
         }
     }
 
@@ -244,10 +262,11 @@ impl Viewport {
         start_col: u64,
         bg_color: Color,
         fg_color: Color,
-        iter: impl Iterator<Item = char>
+        iter: impl Iterator<Item = char>,
     ) -> (u64, u64) {
         self.update_element_coord(element_id, start_row, start_col);
-        self.buff.print_iter(element_id, start_row, start_col, bg_color, fg_color, iter)
+        self.buff
+            .print_iter(element_id, start_row, start_col, bg_color, fg_color, iter)
     }
 
     /// Write word-wrapped text to this viewport from a char iterator.
@@ -259,15 +278,22 @@ impl Viewport {
         start_col: u64,
         bg_color: Color,
         fg_color: Color,
-        iter: impl Iterator<Item = char>
+        iter: impl Iterator<Item = char>,
     ) -> (u64, u64) {
         self.update_element_coord(element_id, start_row, start_col);
-        self.buff.print_at_iter(element_id, start_row, start_col, bg_color, fg_color, iter)
+        self.buff
+            .print_at_iter(element_id, start_row, start_col, bg_color, fg_color, iter)
     }
 
     /// What's the relative (row, column) coordinate in this viewport, given the absolute
     /// (row,col) coordinate and the viewport's absolute (row,col) coordinate?
-    pub fn translate_coordinate(&self, viewport_abs_row: u64, viewport_abs_col: u64, abs_row: u64, abs_col: u64) -> Option<(u64, u64)> {
+    pub fn translate_coordinate(
+        &self,
+        viewport_abs_row: u64,
+        viewport_abs_col: u64,
+        abs_row: u64,
+        abs_col: u64,
+    ) -> Option<(u64, u64)> {
         let (dim_rows, dim_cols) = self.dims();
 
         // bounding box check
@@ -295,22 +321,35 @@ impl Viewport {
     /// viewport-relative (row, column) coordinate?
     /// Return Some((element_id, row, col)) if the given viewport-relative coordinates fall onto a UI element.
     /// Return None otherwise
-    pub fn get_ui_coordinate(&self, viewport_abs_row: u64, viewport_abs_col: u64) -> Option<(u128, u64, u64)> {
+    pub fn get_ui_coordinate(
+        &self,
+        viewport_abs_row: u64,
+        viewport_abs_col: u64,
+    ) -> Option<(u128, u64, u64)> {
         let Some(cell) = self.buff.charcell_at(viewport_abs_row, viewport_abs_col) else {
             return None;
         };
-        let CharCell::Fill { value: _value, bg: _bg, fg: _fg, element_id } = cell else {
+        let CharCell::Fill {
+            value: _value,
+            bg: _bg,
+            fg: _fg,
+            element_id,
+        } = cell
+        else {
             return None;
         };
         let Some((ui_row, ui_col)) = self.element_coords.get(&element_id) else {
             // shouldn't be possible
-            wrb_warn!("Potentially unreachable: no coordinate for element {}", &element_id);
+            wrb_warn!(
+                "Potentially unreachable: no coordinate for element {}",
+                &element_id
+            );
             return None;
         };
         Some((
             element_id,
             viewport_abs_row.checked_sub(*ui_row)?,
-            viewport_abs_col.checked_sub(*ui_col)?
+            viewport_abs_col.checked_sub(*ui_col)?,
         ))
     }
 

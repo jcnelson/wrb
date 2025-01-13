@@ -25,17 +25,17 @@ use std::net::ToSocketAddrs;
 
 use crate::runner::http::run_http_request;
 
+use clarity::vm::types::PrincipalData;
 use clarity::vm::types::QualifiedContractIdentifier;
 use clarity::vm::types::StandardPrincipalData;
 use clarity::vm::Value;
-use clarity::vm::types::PrincipalData;
 
-use stacks_common::types::StacksPublicKeyBuffer;
 use stacks_common::types::chainstate::StacksAddress;
 use stacks_common::types::chainstate::StacksPrivateKey;
 use stacks_common::types::chainstate::StacksPublicKey;
 use stacks_common::types::chainstate::{BlockHeaderHash, ConsensusHash, StacksBlockId};
 use stacks_common::types::net::PeerAddress;
+use stacks_common::types::StacksPublicKeyBuffer;
 use stacks_common::util::hash::{hex_bytes, Hash160, Sha256Sum};
 
 use serde::Deserialize;
@@ -207,12 +207,14 @@ pub struct CallReadOnlyResponse {
 impl Runner {
     pub fn resolve_node(&mut self) -> Result<Option<SocketAddr>, Error> {
         if self.node.is_none() {
-            let mut addrs: Vec<_> = (self.node_host.as_str(), self.node_port).to_socket_addrs()?.collect();
+            let mut addrs: Vec<_> = (self.node_host.as_str(), self.node_port)
+                .to_socket_addrs()?
+                .collect();
             return Ok(addrs.pop());
         }
         Ok(self.node.clone())
     }
-    
+
     /// Run a read-only function call on the node, given a resolved socket address to the node
     pub fn run_call_readonly(
         node_addr: &SocketAddr,
@@ -289,9 +291,12 @@ impl Runner {
         };
         Self::run_call_readonly(&node_addr, contract_id, function_name, function_args)
     }
-    
+
     /// Get an attachment from Atlas, given a resolved node
-    pub fn run_get_attachment(node_addr: &SocketAddr, attachment_hash: &Hash160) -> Result<Vec<u8>, Error> {
+    pub fn run_get_attachment(
+        node_addr: &SocketAddr,
+        attachment_hash: &Hash160,
+    ) -> Result<Vec<u8>, Error> {
         let mut sock = TcpStream::connect(node_addr)?;
         let bytes = run_http_request(
             &mut sock,
@@ -321,23 +326,19 @@ impl Runner {
     /// Get /v2/info
     pub fn run_get_info(node_addr: &SocketAddr) -> Result<RPCPeerInfoData, Error> {
         let mut sock = TcpStream::connect(node_addr)?;
-        let bytes = run_http_request(
-            &mut sock,
-            node_addr,
-            "GET",
-            "/v2/info",
-            None,
-            &[],
-        )?;
-        
+        let bytes = run_http_request(&mut sock, node_addr, "GET", "/v2/info", None, &[])?;
+
         let response: RPCPeerInfoData = serde_json::from_slice(&bytes)
             .map_err(|_| Error::Deserialize("Failed to decode /v2/info response".into()))?;
 
         Ok(response)
     }
-    
+
     /// Get a list of hosts that replicate a particular StackerDB
-    pub fn run_get_stackerdb_replicas(node_addr: &SocketAddr, contract_id: &QualifiedContractIdentifier) -> Result<Vec<SocketAddr>, Error> {
+    pub fn run_get_stackerdb_replicas(
+        node_addr: &SocketAddr,
+        contract_id: &QualifiedContractIdentifier,
+    ) -> Result<Vec<SocketAddr>, Error> {
         let mut sock = TcpStream::connect(node_addr)?;
         let stacks_address = StacksAddress {
             version: contract_id.issuer.0,
@@ -347,20 +348,23 @@ impl Runner {
             &mut sock,
             node_addr,
             "GET",
-            &format!("/v2/stackerdb/{}/{}/replicas", &stacks_address, &contract_id.name),
+            &format!(
+                "/v2/stackerdb/{}/{}/replicas",
+                &stacks_address, &contract_id.name
+            ),
             None,
             &[],
         )?;
 
-        let response : Vec<NeighborAddress> = serde_json::from_slice(&bytes)
+        let response: Vec<NeighborAddress> = serde_json::from_slice(&bytes)
             .map_err(|_| Error::Deserialize("Failed to decode replica list".into()))?;
 
         Ok(response
-           .into_iter()
-           .map(|na| na.addrbytes.to_socketaddr(na.port))
-           .collect())
+            .into_iter()
+            .map(|na| na.addrbytes.to_socketaddr(na.port))
+            .collect())
     }
-    
+
     /// Decode `{signer: principal, num-slots: uint}`
     /// Cribbed from the Stacks blockchain (https://github.com/stacks-network/stacks-core)
     fn parse_stackerdb_signer_slot_entry(
@@ -409,7 +413,7 @@ impl Runner {
     /// Cribbed from the Stacks blockchain (https://github.com/stacks-network/stacks-core)
     fn eval_signer_slots(
         contract_id: &QualifiedContractIdentifier,
-        value: Value
+        value: Value,
     ) -> Result<Vec<(StacksAddress, u32)>, Error> {
         let result = value.expect_result()?;
         let slot_list = match result {
@@ -444,13 +448,12 @@ impl Runner {
                 return Err(Error::Deserialize(reason));
             }
 
-            total_num_slots =
-                total_num_slots
-                    .checked_add(num_slots)
-                    .ok_or(Error::Deserialize(format!(
-                        "Contract {} stipulates more than u32::MAX slots",
-                        &contract_id
-                    )))?;
+            total_num_slots = total_num_slots
+                .checked_add(num_slots)
+                .ok_or(Error::Deserialize(format!(
+                    "Contract {} stipulates more than u32::MAX slots",
+                    &contract_id
+                )))?;
 
             if total_num_slots > STACKERDB_INV_MAX.into() {
                 let reason = format!(
@@ -467,8 +470,12 @@ impl Runner {
     }
 
     /// Get the (uncompressed) list of signers for a stackerdb
-    pub fn run_get_stackerdb_signers(node_addr: &SocketAddr, contract_id: &QualifiedContractIdentifier) -> Result<Vec<StacksAddress>, Error> {
-        let slots_val = Self::run_call_readonly(node_addr, contract_id, STACKERDB_SLOTS_FUNCTION, &[])?;
+    pub fn run_get_stackerdb_signers(
+        node_addr: &SocketAddr,
+        contract_id: &QualifiedContractIdentifier,
+    ) -> Result<Vec<StacksAddress>, Error> {
+        let slots_val =
+            Self::run_call_readonly(node_addr, contract_id, STACKERDB_SLOTS_FUNCTION, &[])?;
         let slots_runs = Self::eval_signer_slots(contract_id, slots_val)?;
 
         // decompress
@@ -483,12 +490,18 @@ impl Runner {
 
     /// Given the address of a local Stacks node, find the address of a node that can serve a given
     /// replica.
-    pub fn run_find_stackerdb(node_addr: &SocketAddr, contract_id: &QualifiedContractIdentifier) -> Result<SocketAddr, Error> {
+    pub fn run_find_stackerdb(
+        node_addr: &SocketAddr,
+        contract_id: &QualifiedContractIdentifier,
+    ) -> Result<SocketAddr, Error> {
         // does this node replicate it?
         let mut rpc_info = Self::run_get_info(node_addr)?;
         let Some(stacker_dbs) = rpc_info.stackerdbs.take() else {
             // this node doesn't support stackerdbs
-            return Err(Error::RPCError(format!("Node {} does not support StackerDBs", node_addr)));
+            return Err(Error::RPCError(format!(
+                "Node {} does not support StackerDBs",
+                node_addr
+            )));
         };
 
         let contract_str = contract_id.to_string();
@@ -502,13 +515,19 @@ impl Runner {
         // this node does not replicate this DB, so ask it for one that does
         let mut replicas = Self::run_get_stackerdb_replicas(node_addr, contract_id)?;
         let Some(replica) = replicas.pop() else {
-            return Err(Error::RPCError(format!("Node {} cannot find a replica for StackerDB {}", node_addr, contract_id)));
+            return Err(Error::RPCError(format!(
+                "Node {} cannot find a replica for StackerDB {}",
+                node_addr, contract_id
+            )));
         };
 
         Ok(replica)
     }
 
-    pub fn find_stackerdb(&mut self, contract_id: &QualifiedContractIdentifier) -> Result<SocketAddr, Error> {
+    pub fn find_stackerdb(
+        &mut self,
+        contract_id: &QualifiedContractIdentifier,
+    ) -> Result<SocketAddr, Error> {
         let Some(node_addr) = self.resolve_node()? else {
             return Err(Error::NotConnected);
         };

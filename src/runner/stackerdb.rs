@@ -26,8 +26,8 @@ use clarity::vm::types::QualifiedContractIdentifier;
 
 use crate::core::Config;
 use crate::runner::http::*;
-use crate::runner::Runner;
 use crate::runner::Error;
+use crate::runner::Runner;
 use crate::storage::StackerDBClient;
 
 use stacks_common::types::chainstate::StacksAddress;

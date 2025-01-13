@@ -26,8 +26,8 @@ use serde::Serialize;
 
 use libstackerdb::StackerDBChunkData;
 
-use crate::storage::StackerDBClient;
 use crate::runner::stackerdb::StackerDBSession;
+use crate::storage::StackerDBClient;
 use crate::storage::Wrbpod;
 
 use stacks_common::util::secp256k1::Secp256k1PrivateKey;
@@ -51,15 +51,11 @@ pub fn init(mainnet: bool, node_host: &str, node_port: u16) {
         .lock()
         .unwrap()
         .set_config(Config::default(mainnet, node_host, node_port));
-    
 }
 
 /// Initialize global config with config
 pub fn init_config(conf: Config) {
-    GLOBALS
-        .lock()
-        .unwrap()
-        .set_config(conf)
+    GLOBALS.lock().unwrap().set_config(conf)
 }
 
 pub fn with_globals<F, R>(func: F) -> R
@@ -67,9 +63,7 @@ where
     F: FnOnce(&mut Globals) -> R,
 {
     match GLOBALS.lock() {
-        Ok(mut globals) => {
-            func(&mut (*globals))
-        }
+        Ok(mut globals) => func(&mut (*globals)),
         Err(_e) => {
             wrb_error!("FATAL: global mutex poisoned");
             panic!();
@@ -79,7 +73,7 @@ where
 
 pub fn with_global_config<F, R>(func: F) -> Option<R>
 where
-    F: FnOnce(&Config) -> R
+    F: FnOnce(&Config) -> R,
 {
     with_globals(|globals| globals.config.as_ref().map(|cfg| func(cfg)))
 }

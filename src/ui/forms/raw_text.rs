@@ -15,13 +15,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use clarity::vm::Value;
-use crate::ui::Error;
 use crate::ui::charbuff::Color;
 use crate::ui::root::Root;
+use crate::ui::Error;
 use crate::ui::ValueExtensions;
+use clarity::vm::Value;
 
-use crate::ui::forms::{WrbFormTypes, WrbFormEvent, WrbForm};
+use crate::ui::forms::{WrbForm, WrbFormEvent, WrbFormTypes};
 
 /// UI command to add text to a viewport
 #[derive(Clone, PartialEq, Debug)]
@@ -32,18 +32,18 @@ pub struct RawText {
     col: u64,
     bg_color: Color,
     fg_color: Color,
-    text: String
+    text: String,
 }
 
 impl WrbForm for RawText {
     fn type_id(&self) -> WrbFormTypes {
         WrbFormTypes::Text
     }
-    
+
     fn element_id(&self) -> u128 {
         self.element_id
     }
-    
+
     fn viewport_id(&self) -> u128 {
         self.viewport_id
     }
@@ -66,7 +66,7 @@ impl WrbForm for RawText {
             .cloned()
             .expect("FATAL: no `row`")
             .expect_u128()?;
-        
+
         let col = text_tuple
             .get("col")
             .cloned()
@@ -88,15 +88,15 @@ impl WrbForm for RawText {
             .expect_u128()?
             // trunate
             &0xffffffffu128;
-        
+
         let element_id = text_tuple
             .get("element-id")
             .cloned()
             .expect("FATAL: no `element-id`")
             .expect_u128()?;
 
-        let bg_color : Color = u32::try_from(bg_color_u128).expect("infallible").into();
-        let fg_color : Color = u32::try_from(fg_color_u128).expect("infallible").into();
+        let bg_color: Color = u32::try_from(bg_color_u128).expect("infallible").into();
+        let fg_color: Color = u32::try_from(fg_color_u128).expect("infallible").into();
 
         Ok(RawText {
             element_id,
@@ -105,7 +105,7 @@ impl WrbForm for RawText {
             col: u64::try_from(col).map_err(|_| Error::Codec("col too big".into()))?,
             bg_color,
             fg_color,
-            text
+            text,
         })
     }
 
@@ -117,12 +117,22 @@ impl WrbForm for RawText {
         let Some(viewport) = root.viewport_mut(self.viewport_id) else {
             return Err(Error::NoViewport(self.viewport_id));
         };
-        let new_cursor = viewport.print_to(self.element_id, self.row, self.col, self.bg_color, self.fg_color, &self.text);
+        let new_cursor = viewport.print_to(
+            self.element_id,
+            self.row,
+            self.col,
+            self.bg_color,
+            self.fg_color,
+            &self.text,
+        );
         Ok(new_cursor)
     }
-    
-    fn handle_event(&mut self, _root: &mut Root, _event: WrbFormEvent) -> Result<Option<Value>, Error> {
+
+    fn handle_event(
+        &mut self,
+        _root: &mut Root,
+        _event: WrbFormEvent,
+    ) -> Result<Option<Value>, Error> {
         Ok(None)
     }
 }
-

@@ -15,22 +15,22 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use clarity::vm::Value;
 use clarity::vm::types::TupleData;
+use clarity::vm::Value;
 
-use crate::ui::Error;
 use crate::ui::charbuff::Color;
 use crate::ui::root::Root;
+use crate::ui::Error;
 use crate::ui::ValueExtensions;
 
-use crate::ui::forms::{WrbFormTypes, WrbFormEvent, WrbForm};
+use crate::ui::forms::{WrbForm, WrbFormEvent, WrbFormTypes};
 
 use crate::DEFAULT_WRB_EPOCH;
 
 #[derive(Clone, PartialEq, Debug)]
 struct CheckboxOption {
     text: String,
-    selected: bool
+    selected: bool,
 }
 
 impl CheckboxOption {
@@ -48,18 +48,21 @@ impl CheckboxOption {
             .expect("FATAL: no `selected`")
             .expect_bool()?;
 
-        Ok(Self {
-            text,
-            selected
-        })
+        Ok(Self { text, selected })
     }
 
     pub fn to_clarity_value(&self) -> Value {
-        Value::Tuple(TupleData::from_data(vec![
-            ("text".into(), Value::string_utf8_from_string_utf8_literal(self.text.clone())
-                .expect("FATAL: could not convert UTF-8 literal back to Clarity string")),
-            ("selected".into(), Value::Bool(self.selected))
-        ]).expect("FATAL: could not build tuple from checkbox item"))
+        Value::Tuple(
+            TupleData::from_data(vec![
+                (
+                    "text".into(),
+                    Value::string_utf8_from_string_utf8_literal(self.text.clone())
+                        .expect("FATAL: could not convert UTF-8 literal back to Clarity string"),
+                ),
+                ("selected".into(), Value::Bool(self.selected)),
+            ])
+            .expect("FATAL: could not build tuple from checkbox item"),
+        )
     }
 
     pub fn to_string(&self) -> String {
@@ -83,45 +86,53 @@ pub struct Checkbox {
     selector: usize,
 }
 
-pub const CHECKBOX_MAX_LEN : usize = 256;
+pub const CHECKBOX_MAX_LEN: usize = 256;
 
 impl WrbForm for Checkbox {
     /// type
     fn type_id(&self) -> WrbFormTypes {
         WrbFormTypes::Checkbox
     }
-    
+
     fn element_id(&self) -> u128 {
         self.element_id
     }
-    
+
     fn viewport_id(&self) -> u128 {
         self.viewport_id
     }
-    
+
     fn focus(&mut self, root: &mut Root, focused: bool) -> Result<(), Error> {
         if focused {
-            root.set_form_cursor(self.viewport_id, self.row + u64::try_from(self.selector).unwrap_or(0), self.col + 1);
+            root.set_form_cursor(
+                self.viewport_id,
+                self.row + u64::try_from(self.selector).unwrap_or(0),
+                self.col + 1,
+            );
         }
         Ok(())
     }
-    
+
     /// Load from a Clarity value
     fn from_clarity_value(viewport_id: u128, v: Value) -> Result<Self, Error> {
         let checkbox_tuple = v.expect_tuple()?;
-        let row = u64::try_from(checkbox_tuple
-            .get("row")
-            .cloned()
-            .expect("FATAL: no `row`")
-            .expect_u128()?)
-            .map_err(|_| Error::Codec("row is too big".into()))?;
-        
-        let col = u64::try_from(checkbox_tuple
-            .get("col")
-            .cloned()
-            .expect("FATAL: no `col`")
-            .expect_u128()?)
-            .map_err(|_| Error::Codec("col is too big".into()))?;
+        let row = u64::try_from(
+            checkbox_tuple
+                .get("row")
+                .cloned()
+                .expect("FATAL: no `row`")
+                .expect_u128()?,
+        )
+        .map_err(|_| Error::Codec("row is too big".into()))?;
+
+        let col = u64::try_from(
+            checkbox_tuple
+                .get("col")
+                .cloned()
+                .expect("FATAL: no `col`")
+                .expect_u128()?,
+        )
+        .map_err(|_| Error::Codec("col is too big".into()))?;
 
         let bg_color_u128 = checkbox_tuple
             .get("bg-color")
@@ -130,7 +141,7 @@ impl WrbForm for Checkbox {
             .expect_u128()?
             // truncate
             & 0xffffffffu128;
-        
+
         let fg_color_u128 = checkbox_tuple
             .get("fg-color")
             .cloned()
@@ -138,7 +149,7 @@ impl WrbForm for Checkbox {
             .expect_u128()?
             // trunate
             &0xffffffffu128;
-        
+
         let focused_bg_color_u128 = checkbox_tuple
             .get("focused-bg-color")
             .cloned()
@@ -146,7 +157,7 @@ impl WrbForm for Checkbox {
             .expect_u128()?
             // truncate
             & 0xffffffffu128;
-        
+
         let focused_fg_color_u128 = checkbox_tuple
             .get("focused-fg-color")
             .cloned()
@@ -168,7 +179,7 @@ impl WrbForm for Checkbox {
             .cloned()
             .expect("FATAL: no `element-id`")
             .expect_u128()?;
-       
+
         let text_options_list = checkbox_tuple
             .get("options")
             .cloned()
@@ -176,7 +187,11 @@ impl WrbForm for Checkbox {
             .expect_list()?;
 
         if text_options_list.len() > CHECKBOX_MAX_LEN {
-            return Err(Error::Page(format!("Too many checkbox items (max is {}, but got {})", CHECKBOX_MAX_LEN, text_options_list.len())));
+            return Err(Error::Page(format!(
+                "Too many checkbox items (max is {}, but got {})",
+                CHECKBOX_MAX_LEN,
+                text_options_list.len()
+            )));
         }
 
         let mut options = vec![];
@@ -184,12 +199,18 @@ impl WrbForm for Checkbox {
             let checkbox_option = CheckboxOption::from_clarity_value(option_value)?;
             options.push(checkbox_option);
         }
-        
-        let bg_color : Color = u32::try_from(bg_color_u128).expect("infallible").into();
-        let fg_color : Color = u32::try_from(fg_color_u128).expect("infallible").into();
-        let focused_bg_color : Color = u32::try_from(focused_bg_color_u128).expect("infallible").into();
-        let focused_fg_color : Color = u32::try_from(focused_fg_color_u128).expect("infallible").into();
-        let selector_color : Color = u32::try_from(selector_color_u128).expect("infallible").into();
+
+        let bg_color: Color = u32::try_from(bg_color_u128).expect("infallible").into();
+        let fg_color: Color = u32::try_from(fg_color_u128).expect("infallible").into();
+        let focused_bg_color: Color = u32::try_from(focused_bg_color_u128)
+            .expect("infallible")
+            .into();
+        let focused_fg_color: Color = u32::try_from(focused_fg_color_u128)
+            .expect("infallible")
+            .into();
+        let selector_color: Color = u32::try_from(selector_color_u128)
+            .expect("infallible")
+            .into();
 
         Ok(Self {
             element_id,
@@ -202,24 +223,47 @@ impl WrbForm for Checkbox {
             focused_bg_color,
             focused_fg_color,
             options,
-            selector: 0
+            selector: 0,
         })
     }
-    
+
     /// Store back to a Clarity value.
     /// Used to send back the state of this UI element to the wrbsite
     fn to_clarity_value(&self) -> Result<Option<Value>, Error> {
-        let value = Value::Tuple(TupleData::from_data(vec![
-            ("row".into(), Value::UInt(u128::from(self.row))),
-            ("col".into(), Value::UInt(u128::from(self.col))),
-            ("bg-color".into(), self.bg_color.to_clarity_value()),
-            ("fg-color".into(), self.fg_color.to_clarity_value()),
-            ("focused-bg-color".into(), self.focused_bg_color.to_clarity_value()),
-            ("focused-fg-color".into(), self.focused_fg_color.to_clarity_value()),
-            ("selector-color".into(), self.selector_color.to_clarity_value()),
-            ("element-id".into(), Value::UInt(self.element_id)),
-            ("options".into(), Value::cons_list(self.options.clone().into_iter().map(|val| val.to_clarity_value()).collect(), &DEFAULT_WRB_EPOCH).expect("FATAL: failed to encode checkbox options list"))
-        ]).expect("FATAL: failed to convert checkbox into Clarity value"));
+        let value = Value::Tuple(
+            TupleData::from_data(vec![
+                ("row".into(), Value::UInt(u128::from(self.row))),
+                ("col".into(), Value::UInt(u128::from(self.col))),
+                ("bg-color".into(), self.bg_color.to_clarity_value()),
+                ("fg-color".into(), self.fg_color.to_clarity_value()),
+                (
+                    "focused-bg-color".into(),
+                    self.focused_bg_color.to_clarity_value(),
+                ),
+                (
+                    "focused-fg-color".into(),
+                    self.focused_fg_color.to_clarity_value(),
+                ),
+                (
+                    "selector-color".into(),
+                    self.selector_color.to_clarity_value(),
+                ),
+                ("element-id".into(), Value::UInt(self.element_id)),
+                (
+                    "options".into(),
+                    Value::cons_list(
+                        self.options
+                            .clone()
+                            .into_iter()
+                            .map(|val| val.to_clarity_value())
+                            .collect(),
+                        &DEFAULT_WRB_EPOCH,
+                    )
+                    .expect("FATAL: failed to encode checkbox options list"),
+                ),
+            ])
+            .expect("FATAL: failed to convert checkbox into Clarity value"),
+        );
         Ok(Some(value))
     }
 
@@ -230,17 +274,15 @@ impl WrbForm for Checkbox {
             return Err(Error::NoViewport(self.viewport_id));
         };
         wrb_test_debug!("Checkbox at ({},{})", self.row, self.col);
-        
+
         let bg_color = if focused {
             self.focused_bg_color.clone()
-        }
-        else {
+        } else {
             self.bg_color.clone()
         };
         let fg_color = if focused {
             self.focused_fg_color.clone()
-        }
-        else {
+        } else {
             self.fg_color.clone()
         };
 
@@ -248,22 +290,43 @@ impl WrbForm for Checkbox {
         for (i, option) in self.options.iter().enumerate() {
             let row = self.row + u64::try_from(i).expect("infallible: too many options");
             next_cursor = if i == self.selector {
-                viewport.print_to(self.element_id, row, self.col, self.selector_color, fg_color, &option.to_string())
-            }
-            else {
-                viewport.print_to(self.element_id, row, self.col, bg_color, fg_color, &option.to_string())
+                viewport.print_to(
+                    self.element_id,
+                    row,
+                    self.col,
+                    self.selector_color,
+                    fg_color,
+                    &option.to_string(),
+                )
+            } else {
+                viewport.print_to(
+                    self.element_id,
+                    row,
+                    self.col,
+                    bg_color,
+                    fg_color,
+                    &option.to_string(),
+                )
             };
         }
-      
+
         if focused {
             // set the cursor to be the checkbox at the selector
-            root.set_form_cursor(self.viewport_id, self.row + u64::try_from(self.selector).unwrap_or(0), self.col + 1);
+            root.set_form_cursor(
+                self.viewport_id,
+                self.row + u64::try_from(self.selector).unwrap_or(0),
+                self.col + 1,
+            );
         }
         Ok(next_cursor)
     }
-    
+
     /// Handle an event
-    fn handle_event(&mut self, root: &mut Root, event: WrbFormEvent) -> Result<Option<Value>, Error> {
+    fn handle_event(
+        &mut self,
+        root: &mut Root,
+        event: WrbFormEvent,
+    ) -> Result<Option<Value>, Error> {
         self.focus(root, root.is_focused(self.element_id))?;
         let WrbFormEvent::Keypress(keycode) = event else {
             return Ok(None);
@@ -277,7 +340,10 @@ impl WrbForm for Checkbox {
         }
 
         if keycode == root.keycode_down() {
-            self.selector = self.selector.saturating_add(1).min(self.options.len().saturating_sub(1));
+            self.selector = self
+                .selector
+                .saturating_add(1)
+                .min(self.options.len().saturating_sub(1));
             self.focus(root, root.is_focused(self.element_id))?;
             return Ok(None);
         }
@@ -289,4 +355,3 @@ impl WrbForm for Checkbox {
         return Ok(None);
     }
 }
-

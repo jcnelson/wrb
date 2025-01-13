@@ -15,19 +15,19 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use termion::event::Key;
 use termion::color;
+use termion::event::Key;
 
 use crate::ui::forms::TextLine;
-use crate::ui::forms::WrbFormEvent;
 use crate::ui::forms::WrbForm;
-use crate::ui::Root;
+use crate::ui::forms::WrbFormEvent;
 use crate::ui::Error;
+use crate::ui::Root;
 
 pub struct ViewerStatus {
     mode_text: String,
     at_top: bool,
-    progress_text: TextLine
+    progress_text: TextLine,
 }
 
 impl ViewerStatus {
@@ -35,16 +35,16 @@ impl ViewerStatus {
         Self {
             progress_text: TextLine::new_detached(wrb_name, 2048),
             mode_text: "(g)oto  |  (q)uit".into(),
-            at_top
+            at_top,
         }
     }
 
     fn trunc_text(mut text: &str, num_cols: usize) -> String {
         text = match text.char_indices().nth(num_cols) {
             None => text,
-            Some((idx, _)) => &text[0..idx]
+            Some((idx, _)) => &text[0..idx],
         };
-        
+
         text.to_string()
     }
 
@@ -57,23 +57,31 @@ impl ViewerStatus {
     }
 
     pub fn render(&self, focused: bool, num_cols: u64) -> String {
-        let num_cols = usize::try_from(num_cols).expect("infallible -- num_cols doesn't fit a usize");
+        let num_cols =
+            usize::try_from(num_cols).expect("infallible -- num_cols doesn't fit a usize");
         let bg_color = if focused {
             color::Bg(color::Rgb(0xff, 0, 0xff))
-        }
-        else {
+        } else {
             color::Bg(color::Rgb(0xff, 0xff, 0))
         };
 
-        let prefix = if focused {
-            self.focus_prefix()
-        }
-        else { 
-            ""
-        };
+        let prefix = if focused { self.focus_prefix() } else { "" };
 
-        let formatted_progress_text = format!("{}{}{}{}{}", color::Fg(color::Black), bg_color, termion::clear::CurrentLine, prefix, Self::trunc_text(self.progress_text.text(), num_cols));
-        let formatted_mode_text = format!("{}{}{}{}", color::Fg(color::White), color::Bg(color::Black), termion::clear::CurrentLine, Self::trunc_text(&self.mode_text, num_cols));
+        let formatted_progress_text = format!(
+            "{}{}{}{}{}",
+            color::Fg(color::Black),
+            bg_color,
+            termion::clear::CurrentLine,
+            prefix,
+            Self::trunc_text(self.progress_text.text(), num_cols)
+        );
+        let formatted_mode_text = format!(
+            "{}{}{}{}",
+            color::Fg(color::White),
+            color::Bg(color::Black),
+            termion::clear::CurrentLine,
+            Self::trunc_text(&self.mode_text, num_cols)
+        );
         format!("{}\r\n{}", &formatted_progress_text, &formatted_mode_text)
     }
 
@@ -96,8 +104,11 @@ impl ViewerStatus {
 
     /// where should the cursor column be?
     pub fn cursor_column(&self, focused: bool) -> usize {
-        self.progress_text.cursor() + if focused { self.focus_prefix().len() } else { 0 }
+        self.progress_text.cursor()
+            + if focused {
+                self.focus_prefix().len()
+            } else {
+                0
+            }
     }
 }
-
-

@@ -108,7 +108,7 @@ pub struct WrbDB {
     chain_tip: StacksBlockId,
     conn: Connection,
     mainnet: bool,
-    created: bool
+    created: bool,
 }
 
 pub struct WritableWrbStore<'a> {

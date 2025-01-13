@@ -40,7 +40,9 @@ pub fn get_wrb_chain_tip(conn: &Connection) -> StacksBlockId {
     let mut stmt = conn
         .prepare("SELECT chain_tip FROM kvstore ORDER BY height DESC, chain_tip ASC LIMIT 1")
         .expect("FATAL: could not prepare query");
-    let mut rows = stmt.query(rusqlite::params![]).expect("FATAL: could not fetch rows");
+    let mut rows = stmt
+        .query(rusqlite::params![])
+        .expect("FATAL: could not fetch rows");
     let mut hash_opt = None;
     while let Some(row) = rows.next().expect("FATAL: could not read block hash") {
         let bhh = StacksBlockId::from_column(&row, "chain_tip")

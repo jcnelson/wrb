@@ -19,8 +19,8 @@ pub mod button;
 pub mod checkbox;
 pub mod print_text;
 pub mod raw_text;
-pub mod textline;
 pub mod textarea;
+pub mod textline;
 
 #[cfg(test)]
 pub mod tests;
@@ -31,8 +31,8 @@ pub use button::Button;
 pub use checkbox::Checkbox;
 pub use print_text::PrintText;
 pub use raw_text::RawText;
-pub use textline::TextLine;
 pub use textarea::TextArea;
+pub use textline::TextLine;
 
 use termion::event::Key;
 
@@ -69,11 +69,8 @@ impl WrbFormTypes {
 
     pub fn focusable(&self) -> bool {
         match *self {
-            Self::Button
-            | Self::Checkbox
-            | Self::TextLine 
-            | Self::TextArea => true,
-            _ => false
+            Self::Button | Self::Checkbox | Self::TextLine | Self::TextArea => true,
+            _ => false,
         }
     }
 }
@@ -88,7 +85,7 @@ impl TryFrom<u128> for WrbFormTypes {
             7 => Ok(Self::Checkbox),
             8 => Ok(Self::TextLine),
             9 => Ok(Self::TextArea),
-            _ => Err(())
+            _ => Err(()),
         }
     }
 }
@@ -144,8 +141,8 @@ impl fmt::Debug for Box<dyn WrbForm> {
     }
 }
 
-/// Trait that each UI form element must implement 
-pub trait WrbForm : Send + WrbFormClone + WrbFormDebug {
+/// Trait that each UI form element must implement
+pub trait WrbForm: Send + WrbFormClone + WrbFormDebug {
     /// What form ID are we?
     fn type_id(&self) -> WrbFormTypes;
     /// What is our element ID?
@@ -158,11 +155,16 @@ pub trait WrbForm : Send + WrbFormClone + WrbFormDebug {
     fn render(&mut self, root: &mut Root, cursor: (u64, u64)) -> Result<(u64, u64), Error>;
     /// Handle an (inputted) event.
     /// If an event is emitted, then it will immediately be fed into the wrbsite's event handler.
-    fn handle_event(&mut self, root: &mut Root, event: WrbFormEvent) -> Result<Option<Value>, Error>;
+    fn handle_event(
+        &mut self,
+        root: &mut Root,
+        event: WrbFormEvent,
+    ) -> Result<Option<Value>, Error>;
     /// Deserialize the state from a Clarity value
-    fn from_clarity_value(viewport_id: u128, value: Value) -> Result<Self, Error> where Self: Sized;
+    fn from_clarity_value(viewport_id: u128, value: Value) -> Result<Self, Error>
+    where
+        Self: Sized;
     /// Serialize the state to a Clarity value, so it can be stored to the wrbsite.
     /// If not applicable to this UI element, then the implementation should return None.
     fn to_clarity_value(&self) -> Result<Option<Value>, Error>;
 }
-

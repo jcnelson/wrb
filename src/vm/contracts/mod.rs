@@ -17,17 +17,11 @@
 pub const WRB_CONTRACT: &'static str = "wrb";
 pub const WRB_LOW_LEVEL_CONTRACT: &'static str = "wrb-ll";
 
-const WRB_LOW_LEVEL_CODE : &'static str = std::include_str!("wrb-ll.clar");
-const WRB_CODE : &'static str = std::include_str!("wrb.clar");
-pub const WRBLIB_CODE : &'static str = std::include_str!("wrblib.clar");
+const WRB_LOW_LEVEL_CODE: &'static str = std::include_str!("wrb-ll.clar");
+const WRB_CODE: &'static str = std::include_str!("wrb.clar");
+pub const WRBLIB_CODE: &'static str = std::include_str!("wrblib.clar");
 
 pub const BOOT_CODE: &'static [(&'static str, &'static str)] = &[
-    (
-        WRB_LOW_LEVEL_CONTRACT,
-        WRB_LOW_LEVEL_CODE,
-    ),
-    (
-        WRB_CONTRACT,
-        WRB_CODE,
-    ),
+    (WRB_LOW_LEVEL_CONTRACT, WRB_LOW_LEVEL_CODE),
+    (WRB_CONTRACT, WRB_CODE),
 ];

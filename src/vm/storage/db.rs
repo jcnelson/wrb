@@ -26,16 +26,22 @@ use rusqlite::ToSql;
 use rusqlite::Transaction;
 
 use clarity::vm::analysis::AnalysisDatabase;
-use clarity::vm::database::{BurnStateDB, ClarityDatabase, HeadersDB, SqliteConnection};
-use clarity::vm::database::sqlite::{sqlite_get_contract_hash, sqlite_insert_metadata, sqlite_get_metadata, sqlite_get_metadata_manual};
-use clarity::vm::errors::{Error as ClarityError, RuntimeErrorType};
-use clarity::vm::types::QualifiedContractIdentifier;
+use clarity::vm::database::sqlite::{
+    sqlite_get_contract_hash, sqlite_get_metadata, sqlite_get_metadata_manual,
+    sqlite_insert_metadata,
+};
 use clarity::vm::database::ClarityBackingStore;
 use clarity::vm::database::SpecialCaseHandler;
+use clarity::vm::database::{BurnStateDB, ClarityDatabase, HeadersDB, SqliteConnection};
+use clarity::vm::errors::{Error as ClarityError, RuntimeErrorType};
+use clarity::vm::types::QualifiedContractIdentifier;
 use stacks_common::types::chainstate::BlockHeaderHash;
 use stacks_common::types::chainstate::StacksBlockId;
 use stacks_common::util::hash::Sha512Trunc256Sum;
 
+use crate::util::sqlite::{
+    query_row, sqlite_open, tx_begin_immediate, u64_to_sql, Error as db_error,
+};
 use crate::vm::storage::util::*;
 use crate::vm::storage::Error;
 use crate::vm::storage::ReadOnlyWrbStore;
@@ -43,9 +49,6 @@ use crate::vm::storage::WrbDB;
 use crate::vm::storage::WrbHeadersDB;
 use crate::vm::storage::WritableWrbStore;
 use crate::vm::storage::WriteBuffer;
-use crate::util::sqlite::{
-    query_row, sqlite_open, tx_begin_immediate, u64_to_sql, Error as db_error,
-};
 
 use crate::vm::special::handle_wrb_contract_call_special_cases;
 use crate::vm::{BOOT_BLOCK_ID, GENESIS_BLOCK_ID};
@@ -163,9 +166,13 @@ fn get_hash(conn: &Connection, tip_height: u64, key: &str) -> Result<Option<Stri
 
 /// Get the highest height stored
 fn tipless_get_highest_tip_height(conn: &Connection) -> Result<u64, Error> {
-    query_row::<u64, _>(conn, "SELECT IFNULL(MAX(height),0) FROM kvstore", rusqlite::params![])
-        .map_err(|e| e.into())
-        .and_then(|height_opt| Ok(height_opt.unwrap_or(0)))
+    query_row::<u64, _>(
+        conn,
+        "SELECT IFNULL(MAX(height),0) FROM kvstore",
+        rusqlite::params![],
+    )
+    .map_err(|e| e.into())
+    .and_then(|height_opt| Ok(height_opt.unwrap_or(0)))
 }
 
 impl WrbHeadersDB {
@@ -185,7 +192,10 @@ impl WrbDB {
         let (create, open_flags) = if std::fs::metadata(&path).is_ok() {
             (false, OpenFlags::SQLITE_OPEN_READ_WRITE)
         } else {
-            (true, OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_READ_WRITE)
+            (
+                true,
+                OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_READ_WRITE,
+            )
         };
 
         let mut conn = sqlite_open(&path, open_flags, true)?;
@@ -250,8 +260,7 @@ impl WrbDB {
                 let height = tipless_get_highest_tip_height(&conn)?;
                 if let Some(bhh) = get_block_at_height(&conn, height, height)? {
                     bhh
-                }
-                else {
+                } else {
                     BOOT_BLOCK_ID.clone()
                 }
             }
@@ -263,7 +272,7 @@ impl WrbDB {
             conn,
             chain_tip,
             mainnet: true,
-            created
+            created,
         })
     }
 
@@ -451,7 +460,7 @@ impl<'a> ReadOnlyWrbStore<'a> {
     pub fn as_analysis_db<'b>(&'b mut self) -> AnalysisDatabase<'b> {
         AnalysisDatabase::new(self)
     }
-    
+
     pub fn mainnet(&self) -> bool {
         self.mainnet
     }
@@ -519,7 +528,9 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
             .expect(&format!("FATAL: no block at height {}", block_height));
         wrb_debug!(
             "bhh at height {} for {} = {:?}",
-            block_height, self.tip_height, &bhh
+            block_height,
+            self.tip_height,
+            &bhh
         );
         bhh
     }
@@ -531,17 +542,29 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
     fn get_open_chain_tip_height(&mut self) -> u32 {
         wrb_debug!(
             "Open chain tip is {} (tip is {})",
-            self.tip_height, &self.chain_tip
+            self.tip_height,
+            &self.chain_tip
         );
         self.tip_height.try_into().expect("Block height too high")
     }
 
     fn get_data(&mut self, key: &str) -> Result<Option<String>, clarity_error> {
         wrb_test_debug!("Get hash for '{}' at height {}", key, self.tip_height);
-        let Some(hash) = get_hash(self.conn, self.tip_height, key).map_err(|e| clarity_error::Interpreter(clarity::vm::errors::InterpreterError::Expect(format!("failed to get hash: {:?}", &e))))? else {
+        let Some(hash) = get_hash(self.conn, self.tip_height, key).map_err(|e| {
+            clarity_error::Interpreter(clarity::vm::errors::InterpreterError::Expect(format!(
+                "failed to get hash: {:?}",
+                &e
+            )))
+        })?
+        else {
             return Ok(None);
         };
-        wrb_test_debug!("Hash for '{}' at height {} is '{}'", key, self.tip_height, &hash);
+        wrb_test_debug!(
+            "Hash for '{}' at height {} is '{}'",
+            key,
+            self.tip_height,
+            &hash
+        );
         let value_opt = SqliteConnection::get(self.get_side_store(), &hash).expect(&format!(
             "FATAL: kvstore contained value hash not found in side storage: {}",
             &hash
@@ -559,20 +582,37 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
         panic!("BUG: attempted commit to read-only K/V");
     }
 
-    fn get_contract_hash(&mut self, contract_id: &QualifiedContractIdentifier) -> Result<(StacksBlockId, Sha512Trunc256Sum), clarity_error> {
+    fn get_contract_hash(
+        &mut self,
+        contract_id: &QualifiedContractIdentifier,
+    ) -> Result<(StacksBlockId, Sha512Trunc256Sum), clarity_error> {
         sqlite_get_contract_hash(self, contract_id)
     }
 
-    fn insert_metadata(&mut self, _contract_id: &QualifiedContractIdentifier, _key: &str, _value: &str) -> Result<(), clarity_error> {
+    fn insert_metadata(
+        &mut self,
+        _contract_id: &QualifiedContractIdentifier,
+        _key: &str,
+        _value: &str,
+    ) -> Result<(), clarity_error> {
         wrb_error!("Attempted to write metadata to read-only K/V");
         panic!("BUG: attempted to write metadata to read-only K/V");
     }
 
-    fn get_metadata(&mut self, contract_id: &QualifiedContractIdentifier, key: &str) -> Result<Option<String>, clarity_error> {
+    fn get_metadata(
+        &mut self,
+        contract_id: &QualifiedContractIdentifier,
+        key: &str,
+    ) -> Result<Option<String>, clarity_error> {
         sqlite_get_metadata(self, contract_id, key)
     }
 
-    fn get_metadata_manual(&mut self, at_height: u32, contract_id: &QualifiedContractIdentifier, key: &str) -> Result<Option<String>, clarity_error> {
+    fn get_metadata_manual(
+        &mut self,
+        at_height: u32,
+        contract_id: &QualifiedContractIdentifier,
+        key: &str,
+    ) -> Result<Option<String>, clarity_error> {
         sqlite_get_metadata_manual(self, at_height, contract_id, key)
     }
 }
@@ -599,15 +639,13 @@ impl<'a> WritableWrbStore<'a> {
 
         wrb_test_debug!("commit_to({} --> {})", target_tip, final_bhh);
         SqliteConnection::commit_metadata_to(&self.tx, target_tip, final_bhh)?;
-        self.write_buf
-            .dump(&self.tx, target_tip, final_bhh)?;
+        self.write_buf.dump(&self.tx, target_tip, final_bhh)?;
 
         let args: &[&dyn ToSql] = &[final_bhh, target_tip];
-        self.tx
-            .execute(
-                "UPDATE kvstore SET chain_tip = ?1 WHERE chain_tip = ?2",
-                args,
-            )?;
+        self.tx.execute(
+            "UPDATE kvstore SET chain_tip = ?1 WHERE chain_tip = ?2",
+            args,
+        )?;
 
         self.tx.commit()?;
         Ok(())
@@ -658,10 +696,21 @@ impl<'a> ClarityBackingStore for WritableWrbStore<'a> {
             return Ok(Some(value.clone()));
         }
         wrb_test_debug!("Get hash for '{}' at height {}", key, self.tip_height);
-        let Some(hash) = get_hash(&self.tx, self.tip_height, key).map_err(|e| clarity_error::Interpreter(clarity::vm::errors::InterpreterError::Expect(format!("failed to get hash: {:?}", &e))))? else {
+        let Some(hash) = get_hash(&self.tx, self.tip_height, key).map_err(|e| {
+            clarity_error::Interpreter(clarity::vm::errors::InterpreterError::Expect(format!(
+                "failed to get hash: {:?}",
+                &e
+            )))
+        })?
+        else {
             return Ok(None);
         };
-        wrb_test_debug!("Hash for '{}' at height {} is '{}'", key, self.tip_height, &hash);
+        wrb_test_debug!(
+            "Hash for '{}' at height {} is '{}'",
+            key,
+            self.tip_height,
+            &hash
+        );
         let value_opt = SqliteConnection::get(self.get_side_store(), &hash).expect(&format!(
             "FATAL: kvstore contained value hash not found in side storage: {}",
             &hash
@@ -670,7 +719,10 @@ impl<'a> ClarityBackingStore for WritableWrbStore<'a> {
         return Ok(value_opt);
     }
 
-    fn get_data_with_proof(&mut self, _key: &str) -> Result<Option<(String, Vec<u8>)>, clarity_error> {
+    fn get_data_with_proof(
+        &mut self,
+        _key: &str,
+    ) -> Result<Option<(String, Vec<u8>)>, clarity_error> {
         unimplemented!()
     }
 
@@ -738,20 +790,37 @@ impl<'a> ClarityBackingStore for WritableWrbStore<'a> {
 
         Ok(())
     }
-    
-    fn get_contract_hash(&mut self, contract_id: &QualifiedContractIdentifier) -> Result<(StacksBlockId, Sha512Trunc256Sum), clarity_error> {
+
+    fn get_contract_hash(
+        &mut self,
+        contract_id: &QualifiedContractIdentifier,
+    ) -> Result<(StacksBlockId, Sha512Trunc256Sum), clarity_error> {
         sqlite_get_contract_hash(self, contract_id)
     }
 
-    fn insert_metadata(&mut self, contract_id: &QualifiedContractIdentifier, key: &str, value: &str) -> Result<(), clarity_error> {
+    fn insert_metadata(
+        &mut self,
+        contract_id: &QualifiedContractIdentifier,
+        key: &str,
+        value: &str,
+    ) -> Result<(), clarity_error> {
         sqlite_insert_metadata(self, contract_id, key, value)
     }
 
-    fn get_metadata(&mut self, contract_id: &QualifiedContractIdentifier, key: &str) -> Result<Option<String>, clarity_error> {
+    fn get_metadata(
+        &mut self,
+        contract_id: &QualifiedContractIdentifier,
+        key: &str,
+    ) -> Result<Option<String>, clarity_error> {
         sqlite_get_metadata(self, contract_id, key)
     }
 
-    fn get_metadata_manual(&mut self, at_height: u32, contract_id: &QualifiedContractIdentifier, key: &str) -> Result<Option<String>, clarity_error> {
+    fn get_metadata_manual(
+        &mut self,
+        at_height: u32,
+        contract_id: &QualifiedContractIdentifier,
+        key: &str,
+    ) -> Result<Option<String>, clarity_error> {
         sqlite_get_metadata_manual(self, at_height, contract_id, key)
     }
 }

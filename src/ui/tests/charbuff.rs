@@ -34,7 +34,14 @@ fn render_charbuff(buff: &CharBuff) -> String {
 #[test]
 fn test_render_charbuff() {
     let mut charbuff = CharBuff::new(80);
-    charbuff.print_at(100, 0, 0, 0x00000000.into(), 0x00ffffff.into(), "Hello world!");
+    charbuff.print_at(
+        100,
+        0,
+        0,
+        0x00000000.into(),
+        0x00ffffff.into(),
+        "Hello world!",
+    );
     charbuff.print_at(
         101,
         1,
@@ -67,7 +74,14 @@ fn test_render_charbuff() {
         0xffffffff.into(),
         "wordwrapwordwrapwordwrapwordwrapwordwrapwordwrapwordwrapwordwrapwordwrapwordwrapwordwrap",
     );
-    charbuff.print_at(105, 3, 25, 0x00ff0000.into(), 0x00000000.into(), "overwrite");
+    charbuff.print_at(
+        105,
+        3,
+        25,
+        0x00ff0000.into(),
+        0x00000000.into(),
+        "overwrite",
+    );
 
     // check contents of charbuff
     assert_eq!(
@@ -1868,7 +1882,7 @@ fn test_render_charbuff() {
             Scanline::ResetColor
         ]
     );
-    
+
     let mut output = "".to_string();
     for sl in scanlines {
         output.push_str(&sl.into_term_code());

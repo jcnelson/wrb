@@ -41,18 +41,18 @@ use stacks_common::util::log;
 use crate::util::{DEFAULT_CHAIN_ID, DEFAULT_WRB_CLARITY_VERSION, DEFAULT_WRB_EPOCH};
 use clarity::boot_util::boot_code_addr;
 
+use crate::vm::storage;
 use clarity::vm::analysis::AnalysisDatabase;
+use clarity::vm::ast;
+use clarity::vm::contexts::GlobalContext;
 use clarity::vm::database::BurnStateDB;
 use clarity::vm::database::ClarityDatabase;
 use clarity::vm::database::HeadersDB;
+use clarity::vm::database::MemoryBackingStore;
 use clarity::vm::eval_all;
 use clarity::vm::ClarityVersion;
-use clarity::vm::Value;
 use clarity::vm::ContractContext;
-use clarity::vm::database::MemoryBackingStore;
-use clarity::vm::contexts::GlobalContext;
-use clarity::vm::ast;
-use crate::vm::storage;
+use clarity::vm::Value;
 
 use crate::vm::storage::util::*;
 use crate::vm::storage::ReadOnlyWrbStore;
@@ -64,10 +64,12 @@ use crate::vm::ClarityVM;
 use crate::vm::Error;
 use crate::vm::WRB_LOW_LEVEL_CONTRACT;
 
+use stacks_common::address::{
+    C32_ADDRESS_VERSION_MAINNET_SINGLESIG, C32_ADDRESS_VERSION_TESTNET_SINGLESIG,
+};
 use stacks_common::types::chainstate::StacksBlockId;
 use stacks_common::util::hash::to_hex;
 use stacks_common::util::hash::Hash160;
-use stacks_common::address::{C32_ADDRESS_VERSION_MAINNET_SINGLESIG, C32_ADDRESS_VERSION_TESTNET_SINGLESIG};
 
 use crate::core::with_global_config;
 
@@ -170,9 +172,8 @@ impl ClarityVM {
     pub fn new(db_path: &str, domain: &str) -> Result<ClarityVM, Error> {
         let wrbdb = WrbDB::open(db_path, domain, None)?;
         let created = wrbdb.created();
-        let mainnet = with_global_config(|cfg| cfg.mainnet())
-            .ok_or(Error::NotInitialized)?;
-        
+        let mainnet = with_global_config(|cfg| cfg.mainnet()).ok_or(Error::NotInitialized)?;
+
         let mut parts = domain.split(".");
         let Some(name) = parts.next() else {
             return Err(Error::InvalidInput("Invalid BNS name".into()));
@@ -198,7 +199,10 @@ impl ClarityVM {
     }
 
     /// Start working on the next iteration of loading up the wrb page
-    pub fn begin_page_load<'a>(&'a mut self, code_hash: &Hash160) -> Result<WritableWrbStore<'a>, Error> {
+    pub fn begin_page_load<'a>(
+        &'a mut self,
+        code_hash: &Hash160,
+    ) -> Result<WritableWrbStore<'a>, Error> {
         let cur_tip = get_wrb_chain_tip(self.db.conn());
         let cur_height = get_wrb_block_height(self.db.conn(), &cur_tip).expect(&format!(
             "FATAL: failed to determine height of {}",
@@ -213,7 +217,7 @@ impl ClarityVM {
             &next_tip,
             cur_height + 1
         );
-        
+
         let mainnet = self.mainnet;
         let ll_contract_id = QualifiedContractIdentifier::new(
             boot_code_addr(mainnet).into(),
@@ -260,8 +264,7 @@ impl ClarityVM {
         let hash = Hash160::from_data(&self.db.get_domain().as_bytes());
         let version = if self.mainnet {
             C32_ADDRESS_VERSION_MAINNET_SINGLESIG
-        }
-        else {
+        } else {
             C32_ADDRESS_VERSION_TESTNET_SINGLESIG
         };
         QualifiedContractIdentifier::new(StandardPrincipalData(version, hash.0), "main".into())
@@ -367,7 +370,11 @@ impl ClarityVM {
             |env| env.global_context.database.get_contract(&ll_contract_id),
         )?;
 
-        let code = format!(r#"(set-app-name {{ name: 0x{}, namespace: 0x{} }})"#, to_hex(name.as_bytes()), to_hex(namespace.as_bytes()));
+        let code = format!(
+            r#"(set-app-name {{ name: 0x{}, namespace: 0x{} }})"#,
+            to_hex(name.as_bytes()),
+            to_hex(namespace.as_bytes())
+        );
         vm_env.execute_in_env(
             StandardPrincipalData::transient().into(),
             None,

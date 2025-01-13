@@ -20,14 +20,14 @@ pub mod log;
 pub mod sqlite;
 
 use clarity::vm::costs::ExecutionCost;
-use clarity::vm::ClarityVersion;
 use clarity::vm::types::StandardPrincipalData;
+use clarity::vm::ClarityVersion;
 
 use stacks_common::types::chainstate::BlockHeaderHash;
 use stacks_common::types::chainstate::ConsensusHash;
 use stacks_common::types::StacksEpochId;
-use stacks_common::util::secp256k1::{Secp256k1PublicKey, Secp256k1PrivateKey};
 use stacks_common::util::hash::Hash160;
+use stacks_common::util::secp256k1::{Secp256k1PrivateKey, Secp256k1PublicKey};
 
 // copied from core
 pub const FIRST_BURNCHAIN_CONSENSUS_HASH: ConsensusHash = ConsensusHash([0u8; 20]);

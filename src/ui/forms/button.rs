@@ -15,15 +15,15 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use clarity::vm::Value;
-use crate::ui::Error;
 use crate::ui::charbuff::Color;
 use crate::ui::root::Root;
+use crate::ui::Error;
 use crate::ui::ValueExtensions;
+use clarity::vm::Value;
 
 use crate::ui::forms::WrbForm;
-use crate::ui::forms::WrbFormTypes;
 use crate::ui::forms::WrbFormEvent;
+use crate::ui::forms::WrbFormTypes;
 
 /// UI command to produce a button
 #[derive(Clone, PartialEq, Debug)]
@@ -48,7 +48,7 @@ impl WrbForm for Button {
     fn element_id(&self) -> u128 {
         self.element_id
     }
-    
+
     fn viewport_id(&self) -> u128 {
         self.viewport_id
     }
@@ -59,7 +59,7 @@ impl WrbForm for Button {
         }
         Ok(())
     }
-    
+
     /// Construct from Clarity value
     fn from_clarity_value(viewport_id: u128, v: Value) -> Result<Self, Error> {
         let button_tuple = v.expect_tuple()?;
@@ -69,19 +69,23 @@ impl WrbForm for Button {
             .expect("FATAL: no `text`")
             .expect_utf8()?;
 
-        let row = u64::try_from(button_tuple
-            .get("row")
-            .cloned()
-            .expect("FATAL: no `row`")
-            .expect_u128()?)
-            .map_err(|_| Error::Codec("row is too big".into()))?;
-        
-        let col = u64::try_from(button_tuple
-            .get("col")
-            .cloned()
-            .expect("FATAL: no `col`")
-            .expect_u128()?)
-            .map_err(|_| Error::Codec("col is too big".into()))?;
+        let row = u64::try_from(
+            button_tuple
+                .get("row")
+                .cloned()
+                .expect("FATAL: no `row`")
+                .expect_u128()?,
+        )
+        .map_err(|_| Error::Codec("row is too big".into()))?;
+
+        let col = u64::try_from(
+            button_tuple
+                .get("col")
+                .cloned()
+                .expect("FATAL: no `col`")
+                .expect_u128()?,
+        )
+        .map_err(|_| Error::Codec("col is too big".into()))?;
 
         let bg_color_u128 = button_tuple
             .get("bg-color")
@@ -90,7 +94,7 @@ impl WrbForm for Button {
             .expect_u128()?
             // truncate
             & 0xffffffffu128;
-        
+
         let fg_color_u128 = button_tuple
             .get("fg-color")
             .cloned()
@@ -98,7 +102,7 @@ impl WrbForm for Button {
             .expect_u128()?
             // trunate
             &0xffffffffu128;
-        
+
         let focused_bg_color_u128 = button_tuple
             .get("focused-bg-color")
             .cloned()
@@ -106,7 +110,7 @@ impl WrbForm for Button {
             .expect_u128()?
             // truncate
             & 0xffffffffu128;
-        
+
         let focused_fg_color_u128 = button_tuple
             .get("focused-fg-color")
             .cloned()
@@ -121,10 +125,14 @@ impl WrbForm for Button {
             .expect("FATAL: no `element-id`")
             .expect_u128()?;
 
-        let bg_color : Color = u32::try_from(bg_color_u128).expect("infallible").into();
-        let fg_color : Color = u32::try_from(fg_color_u128).expect("infallible").into();
-        let focused_bg_color : Color = u32::try_from(focused_bg_color_u128).expect("infallible").into();
-        let focused_fg_color : Color = u32::try_from(focused_fg_color_u128).expect("infallible").into();
+        let bg_color: Color = u32::try_from(bg_color_u128).expect("infallible").into();
+        let fg_color: Color = u32::try_from(fg_color_u128).expect("infallible").into();
+        let focused_bg_color: Color = u32::try_from(focused_bg_color_u128)
+            .expect("infallible")
+            .into();
+        let focused_fg_color: Color = u32::try_from(focused_fg_color_u128)
+            .expect("infallible")
+            .into();
 
         Ok(Button {
             element_id,
@@ -153,10 +161,23 @@ impl WrbForm for Button {
         };
         wrb_test_debug!("Button '{}' at ({},{})", &self.text, self.row, self.col);
         let new_cursor = if focused {
-            viewport.print_to(self.element_id, self.row, self.col, self.focused_bg_color, self.focused_fg_color, &format!("<{}>", &self.text))
-        }
-        else {
-            viewport.print_to(self.element_id, self.row, self.col, self.bg_color, self.fg_color, &format!("[{}]", &self.text))
+            viewport.print_to(
+                self.element_id,
+                self.row,
+                self.col,
+                self.focused_bg_color,
+                self.focused_fg_color,
+                &format!("<{}>", &self.text),
+            )
+        } else {
+            viewport.print_to(
+                self.element_id,
+                self.row,
+                self.col,
+                self.bg_color,
+                self.fg_color,
+                &format!("[{}]", &self.text),
+            )
         };
 
         if focused {
@@ -165,9 +186,13 @@ impl WrbForm for Button {
         }
         Ok(new_cursor)
     }
-    
+
     /// Handle an event
-    fn handle_event(&mut self, root: &mut Root, event: WrbFormEvent) -> Result<Option<Value>, Error> {
+    fn handle_event(
+        &mut self,
+        root: &mut Root,
+        event: WrbFormEvent,
+    ) -> Result<Option<Value>, Error> {
         self.focus(root, root.is_focused(self.element_id))?;
         let WrbFormEvent::Keypress(keycode) = event else {
             return Ok(None);
@@ -181,4 +206,3 @@ impl WrbForm for Button {
         Ok(Some(Value::UInt(self.element_id)))
     }
 }
-

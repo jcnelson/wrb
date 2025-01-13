@@ -35,7 +35,7 @@
     (wrb-textline VIEWPORT_WIDGETS u10 u0 u60 u"Initial text"))
 
 (define-constant TEXTAREA_1
-    (wrb-textarea VIEWPORT_WIDGETS u15 u0 u20 u60 (* u2 u20 u260) u"Initial text"))
+    (wrb-textarea VIEWPORT_WIDGETS u15 u0 u3 u60 (* u2 u3 u60) u"Initial text"))
 
 (define-data-var event-count uint u0)
 

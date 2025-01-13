@@ -31,8 +31,8 @@ use crate::runner::Runner;
 
 use clarity::vm::types::BufferLength;
 use clarity::vm::types::PrincipalData;
-use clarity::vm::types::ResponseData;
 use clarity::vm::types::QualifiedContractIdentifier;
+use clarity::vm::types::ResponseData;
 use clarity::vm::types::SequenceData;
 use clarity::vm::types::Value;
 
@@ -120,7 +120,7 @@ pub enum BNSError {
     NameNotFound,
     NamespaceNotFound,
     NameGracePeriod,
-    NameExpired
+    NameExpired,
 }
 
 impl TryFrom<ResponseData> for BNSError {
@@ -134,23 +134,33 @@ impl TryFrom<ResponseData> for BNSError {
             1005 => Ok(Self::NamespaceNotFound),
             2009 => Ok(Self::NameGracePeriod),
             2008 => Ok(Self::NameExpired),
-            _ => Err(Error::Deserialize("Unrecognized error code".into()))
+            _ => Err(Error::Deserialize("Unrecognized error code".into())),
         }
     }
 }
 
 impl Runner {
     /// Look up a BNS name
-    pub fn bns_lookup(&mut self, namespace: &str, name: &str) -> Result<Result<BNSNameRecord, BNSError>, Error> {
+    pub fn bns_lookup(
+        &mut self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Result<BNSNameRecord, BNSError>, Error> {
         let bns_contract = self.bns_contract_id.clone();
-        let v = self.call_readonly(&bns_contract, "name-resolve", &[Value::string_ascii_from_bytes(namespace.as_bytes().to_vec())?, Value::string_ascii_from_bytes(name.as_bytes().to_vec())?])?;
+        let v = self.call_readonly(
+            &bns_contract,
+            "name-resolve",
+            &[
+                Value::string_ascii_from_bytes(namespace.as_bytes().to_vec())?,
+                Value::string_ascii_from_bytes(name.as_bytes().to_vec())?,
+            ],
+        )?;
         let Value::Response(v_res) = v else {
             return Err(Error::Deserialize("Expected response".into()));
         };
         if v_res.committed {
             return Ok(Ok(BNSNameRecord::try_from(v_res)?));
-        }
-        else {
+        } else {
             return Ok(Err(BNSError::try_from(v_res)?));
         }
     }

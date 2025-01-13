@@ -20,12 +20,12 @@ use std::sync::Mutex;
 
 use crate::core::Config;
 
-use crate::storage::Wrbpod;
 use crate::storage::StackerDBClient;
+use crate::storage::Wrbpod;
 
+use std::fs::File;
 use std::io;
 use std::io::Write;
-use std::fs::File;
 
 /// Globally-accessible state that is hard to pass around otherwise
 pub struct Globals {
@@ -75,7 +75,6 @@ impl Globals {
     pub fn get_wrbpod_session(&mut self, session_id: u128) -> Option<&mut Wrbpod> {
         self.wrbpod_sessions.get_mut(&session_id)
     }
-
 }
 
 lazy_static! {
@@ -83,12 +82,21 @@ lazy_static! {
         config: None,
         wrbpod_sessions: HashMap::new(),
     });
-
-    pub static ref LOGFILE: Mutex<Option<File>> = Mutex::new(Some(File::options().append(true).write(true).open("/dev/stderr").expect("FATAL: failed to open /dev/stderr")));
+    pub static ref LOGFILE: Mutex<Option<File>> = Mutex::new(Some(
+        File::options()
+            .append(true)
+            .write(true)
+            .open("/dev/stderr")
+            .expect("FATAL: failed to open /dev/stderr")
+    ));
 }
 
 pub fn redirect_logfile(new_path: &str) -> Result<(), io::Error> {
-    let new_file = File::options().create(true).append(true).write(true).open(new_path)?;
+    let new_file = File::options()
+        .create(true)
+        .append(true)
+        .write(true)
+        .open(new_path)?;
     match LOGFILE.lock() {
         Ok(mut lf_opt) => lf_opt.replace(new_file),
         Err(_e) => {
@@ -100,7 +108,7 @@ pub fn redirect_logfile(new_path: &str) -> Result<(), io::Error> {
 
 pub fn with_logfile<F, R>(func: F) -> Option<R>
 where
-    F: FnOnce(&mut File) -> R
+    F: FnOnce(&mut File) -> R,
 {
     match LOGFILE.lock() {
         Ok(mut lf_opt) => lf_opt.as_mut().map(|lf| func(lf)),

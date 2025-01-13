@@ -18,17 +18,17 @@
 use std::collections::HashMap;
 use std::fs;
 
+use crate::runner::Error as RuntimeError;
 use crate::storage::StackerDBClient;
 use crate::storage::WrbpodSlices;
 use crate::storage::WRBPOD_SLICES_VERSION;
-use crate::runner::Error as RuntimeError;
 
 use crate::ui::Renderer;
 
 use crate::vm::ClarityVM;
 
-use stacks_common::util::hash::Sha512Trunc256Sum;
 use stacks_common::types::chainstate::StacksPrivateKey;
+use stacks_common::util::hash::Sha512Trunc256Sum;
 
 use libstackerdb::{SlotMetadata, StackerDBChunkAckData, StackerDBChunkData};
 
@@ -44,7 +44,7 @@ fn test_wrbpod_open() {
     if fs::metadata(&db_path).is_ok() {
         fs::remove_dir_all(&db_path).unwrap();
     }
-    
+
     let code = r#"
     (wrb-root u80 u1)
     (wrb-viewport u0 u0 u0 u80 u1)
@@ -87,7 +87,7 @@ fn test_wrbpod_slots() {
     if fs::metadata(&db_path).is_ok() {
         fs::remove_dir_all(&db_path).unwrap();
     }
-    
+
     let code = r#"
     (wrb-root u80 u1)
     (wrb-viewport u0 u0 u0 u80 u1)
@@ -147,7 +147,7 @@ fn test_wrbpod_dirty_slices() {
     if fs::metadata(&db_path).is_ok() {
         fs::remove_dir_all(&db_path).unwrap();
     }
-    
+
     let code = r#"
     (wrb-root u80 u1)
     (wrb-viewport u0 u0 u0 u80 u1)
@@ -199,7 +199,7 @@ fn test_wrbpod_sync_slot() {
     if fs::metadata(&db_path).is_ok() {
         fs::remove_dir_all(&db_path).unwrap();
     }
-    
+
     let code = r#"
     (wrb-root u80 u1)
     (wrb-viewport u0 u0 u0 u80 u1)

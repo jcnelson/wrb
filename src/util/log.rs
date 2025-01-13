@@ -15,11 +15,11 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::env;
+use std::fmt;
 use std::fs;
 use std::io;
 use std::io::Write;
-use std::fmt;
-use std::env;
 use std::sync::Mutex;
 
 use crate::core::globals::with_logfile;
@@ -41,7 +41,7 @@ impl WrbLogLevel {
             Self::Debug => 3,
             Self::Info => 2,
             Self::Warn => 1,
-            Self::Error => 0
+            Self::Error => 0,
         }
     }
 }
@@ -56,7 +56,7 @@ impl fmt::Display for WrbLogLevel {
             Self::Debug => write!(f, "DEBG"),
             Self::Info => write!(f, "INFO"),
             Self::Warn => write!(f, "WARN"),
-            Self::Error => write!(f, "ERRO")
+            Self::Error => write!(f, "ERRO"),
         }
     }
 }
@@ -66,13 +66,11 @@ pub fn get_loglevel() -> WrbLogLevel {
         Ok(mut ll_opt) => {
             if let Some(ll) = ll_opt.as_ref() {
                 *ll
-            }
-            else {
+            } else {
                 if env::var("WRB_DEBUG") == Ok("1".into()) {
                     (*ll_opt).replace(WrbLogLevel::Debug);
                     WrbLogLevel::Debug
-                }
-                else {
+                } else {
                     (*ll_opt).replace(WrbLogLevel::Info);
                     WrbLogLevel::Info
                 }
@@ -85,15 +83,21 @@ pub fn get_loglevel() -> WrbLogLevel {
 }
 
 pub fn write_to_log(msg: &str) -> Result<(), io::Error> {
-    with_logfile(|lf| {
-        lf.write_all(msg.as_bytes())
-    })
-    .unwrap_or(Ok(()))
+    with_logfile(|lf| lf.write_all(msg.as_bytes())).unwrap_or(Ok(()))
 }
 
 pub fn log_fmt(level: WrbLogLevel, file: &str, line: u32, msg: &str) -> String {
     let now = get_epoch_time_ms();
-    format!("{} [{}.{:03}] [{}:{}] [{:?}]: {}\n", &level, now / 1000, now % 1000, file, line, std::thread::current().id(), msg)
+    format!(
+        "{} [{}.{:03}] [{}:{}] [{:?}]: {}\n",
+        &level,
+        now / 1000,
+        now % 1000,
+        file,
+        line,
+        std::thread::current().id(),
+        msg
+    )
 }
 
 #[macro_export]

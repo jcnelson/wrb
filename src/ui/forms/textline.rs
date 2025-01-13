@@ -15,13 +15,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use clarity::vm::Value;
-use crate::ui::Error;
 use crate::ui::charbuff::Color;
 use crate::ui::root::Root;
+use crate::ui::Error;
 use crate::ui::ValueExtensions;
+use clarity::vm::Value;
 
-use crate::ui::forms::{WrbFormTypes, WrbFormEvent, WrbForm};
+use crate::ui::forms::{WrbForm, WrbFormEvent, WrbFormTypes};
 
 use termion::event::Key;
 
@@ -39,7 +39,7 @@ pub struct TextLine {
     focused_fg_color: Color,
     inner_text: String,
     max_len: usize,
-    insert: bool
+    insert: bool,
 }
 
 impl TextLine {
@@ -57,7 +57,7 @@ impl TextLine {
             focused_fg_color: 0u32.into(),
             inner_text: text,
             max_len,
-            insert: true
+            insert: true,
         }
     }
 
@@ -82,18 +82,22 @@ impl WrbForm for TextLine {
     fn type_id(&self) -> WrbFormTypes {
         WrbFormTypes::TextLine
     }
-    
+
     fn element_id(&self) -> u128 {
         self.element_id
     }
-    
+
     fn viewport_id(&self) -> u128 {
         self.viewport_id
     }
-    
+
     fn focus(&mut self, root: &mut Root, focused: bool) -> Result<(), Error> {
         if focused {
-            root.set_form_cursor(self.viewport_id, self.row, self.col + u64::try_from(self.cursor).unwrap_or(0));
+            root.set_form_cursor(
+                self.viewport_id,
+                self.row,
+                self.col + u64::try_from(self.cursor).unwrap_or(0),
+            );
         }
         Ok(())
     }
@@ -112,13 +116,13 @@ impl WrbForm for TextLine {
             .cloned()
             .expect("FATAL: no `row`")
             .expect_u128()?;
-        
+
         let col = text_tuple
             .get("col")
             .cloned()
             .expect("FATAL: no `col`")
             .expect_u128()?;
-        
+
         let max_len = text_tuple
             .get("max-len")
             .cloned()
@@ -140,7 +144,7 @@ impl WrbForm for TextLine {
             .expect_u128()?
             // trunate
             &0xffffffffu128;
-        
+
         let focused_bg_color_u128 = text_tuple
             .get("focused-bg-color")
             .cloned()
@@ -148,7 +152,7 @@ impl WrbForm for TextLine {
             .expect_u128()?
             // truncate
             & 0xffffffffu128;
-        
+
         let focused_fg_color_u128 = text_tuple
             .get("focused-fg-color")
             .cloned()
@@ -163,10 +167,14 @@ impl WrbForm for TextLine {
             .expect("FATAL: no `element-id`")
             .expect_u128()?;
 
-        let bg_color : Color = u32::try_from(bg_color_u128).expect("infallible").into();
-        let fg_color : Color = u32::try_from(fg_color_u128).expect("infallible").into();
-        let focused_bg_color : Color = u32::try_from(focused_bg_color_u128).expect("infallible").into();
-        let focused_fg_color : Color = u32::try_from(focused_fg_color_u128).expect("infallible").into();
+        let bg_color: Color = u32::try_from(bg_color_u128).expect("infallible").into();
+        let fg_color: Color = u32::try_from(fg_color_u128).expect("infallible").into();
+        let focused_bg_color: Color = u32::try_from(focused_bg_color_u128)
+            .expect("infallible")
+            .into();
+        let focused_fg_color: Color = u32::try_from(focused_fg_color_u128)
+            .expect("infallible")
+            .into();
 
         Ok(TextLine {
             element_id,
@@ -174,13 +182,14 @@ impl WrbForm for TextLine {
             row: u64::try_from(row).map_err(|_| Error::Codec("row too big".into()))?,
             col: u64::try_from(col).map_err(|_| Error::Codec("col too big".into()))?,
             cursor: 0,
-            max_len: usize::try_from(max_len).map_err(|_| Error::Codec("max-len too big".into()))?,
+            max_len: usize::try_from(max_len)
+                .map_err(|_| Error::Codec("max-len too big".into()))?,
             bg_color,
             fg_color,
             focused_bg_color,
             focused_fg_color,
             inner_text: text,
-            insert: true
+            insert: true,
         })
     }
 
@@ -196,102 +205,124 @@ impl WrbForm for TextLine {
         };
         let bg_color = if focused {
             self.focused_bg_color.clone()
-        }
-        else {
+        } else {
             self.bg_color.clone()
         };
         let fg_color = if focused {
             self.focused_fg_color.clone()
-        }
-        else {
+        } else {
             self.fg_color.clone()
         };
 
         let (_vp_rows, vp_cols) = viewport.dims();
-        let max_viewable_cols = vp_cols.saturating_sub(self.col).min(u64::try_from(self.max_len).unwrap_or(u64::MAX));
-        let padded_text = format!("{:width$}", &self.inner_text, width=usize::try_from(max_viewable_cols).unwrap_or(0));
-        let new_cursor = viewport.print_to(self.element_id, self.row, self.col, bg_color, fg_color, &padded_text);
+        let max_viewable_cols = vp_cols
+            .saturating_sub(self.col)
+            .min(u64::try_from(self.max_len).unwrap_or(u64::MAX));
+        let padded_text = format!(
+            "{:width$}",
+            &self.inner_text,
+            width = usize::try_from(max_viewable_cols).unwrap_or(0)
+        );
+        let new_cursor = viewport.print_to(
+            self.element_id,
+            self.row,
+            self.col,
+            bg_color,
+            fg_color,
+            &padded_text,
+        );
 
         // set the form cursor to be wherever our cursor is
         if focused {
-            root.set_form_cursor(self.viewport_id, self.row, self.col + u64::try_from(self.cursor).unwrap_or(0));
+            root.set_form_cursor(
+                self.viewport_id,
+                self.row,
+                self.col + u64::try_from(self.cursor).unwrap_or(0),
+            );
         }
         Ok(new_cursor)
     }
-    
+
     /// This doesn't generate an event the main loop cares about, but it does update the text
     /// buffer.
-    fn handle_event(&mut self, root: &mut Root, event: WrbFormEvent) -> Result<Option<Value>, Error> {
+    fn handle_event(
+        &mut self,
+        root: &mut Root,
+        event: WrbFormEvent,
+    ) -> Result<Option<Value>, Error> {
         match event {
-            WrbFormEvent::Keypress(key) => {
-                match key {
-                    Key::Left => {
-                        self.cursor = self.cursor.saturating_sub(1);
-                    }
-                    Key::Right => {
-                        self.cursor = self.cursor.saturating_add(1).min(self.inner_text.len()).min(self.max_len);
-                    }
-                    Key::Backspace | Key::Ctrl('h') => {
-                        if self.cursor > 0 {
-                            let mut new_text = String::with_capacity(self.max_len);
-                            for (i, chr) in self.inner_text.chars().enumerate() {
-                                if i == self.cursor - 1 {
-                                    continue;
-                                }
-                                new_text.push(chr);
+            WrbFormEvent::Keypress(key) => match key {
+                Key::Left => {
+                    self.cursor = self.cursor.saturating_sub(1);
+                }
+                Key::Right => {
+                    self.cursor = self
+                        .cursor
+                        .saturating_add(1)
+                        .min(self.inner_text.len())
+                        .min(self.max_len);
+                }
+                Key::Backspace | Key::Ctrl('h') => {
+                    if self.cursor > 0 {
+                        let mut new_text = String::with_capacity(self.max_len);
+                        for (i, chr) in self.inner_text.chars().enumerate() {
+                            if i == self.cursor - 1 {
+                                continue;
                             }
-                            self.inner_text = new_text;
-                            self.cursor -= 1;
+                            new_text.push(chr);
                         }
+                        self.inner_text = new_text;
+                        self.cursor -= 1;
                     }
-                    Key::Delete | Key::Ctrl('?') => {
-                        if self.cursor < self.inner_text.len() {
+                }
+                Key::Delete | Key::Ctrl('?') => {
+                    if self.cursor < self.inner_text.len() {
+                        let mut new_text = String::with_capacity(self.max_len);
+                        for (i, chr) in self.inner_text.chars().enumerate() {
+                            if i == self.cursor {
+                                continue;
+                            }
+                            new_text.push(chr);
+                        }
+                        self.inner_text = new_text;
+                    }
+                }
+                Key::Insert => {
+                    self.insert = !self.insert;
+                }
+                Key::Home => {
+                    self.cursor = 0;
+                }
+                Key::End => {
+                    self.cursor = self.inner_text.len();
+                }
+                Key::Char(c) => {
+                    if c != '\n' && c != '\r' {
+                        if self.cursor == self.inner_text.len()
+                            && self.inner_text.len() < self.max_len
+                        {
+                            self.inner_text.push(c);
+                            self.cursor += 1;
+                        } else if self.inner_text.len() < self.max_len {
                             let mut new_text = String::with_capacity(self.max_len);
                             for (i, chr) in self.inner_text.chars().enumerate() {
                                 if i == self.cursor {
-                                    continue;
+                                    new_text.push(c);
+                                    if !self.insert {
+                                        continue;
+                                    }
                                 }
                                 new_text.push(chr);
                             }
                             self.inner_text = new_text;
+                            self.cursor += 1;
                         }
                     }
-                    Key::Insert => {
-                        self.insert = !self.insert;
-                    }
-                    Key::Home => {
-                        self.cursor = 0;
-                    }
-                    Key::End => {
-                        self.cursor = self.inner_text.len();
-                    }
-                    Key::Char(c) => {
-                        if c != '\n' && c != '\r' {
-                            if self.cursor == self.inner_text.len() && self.inner_text.len() < self.max_len {
-                                self.inner_text.push(c);
-                            }
-                            else if self.inner_text.len() < self.max_len {
-                                let mut new_text = String::with_capacity(self.max_len);
-                                for (i, chr) in self.inner_text.chars().enumerate() {
-                                    if i == self.cursor {
-                                        new_text.push(c);
-                                        if !self.insert {
-                                            continue;
-                                        }
-                                    }
-                                    new_text.push(chr);
-                                }
-                                self.inner_text = new_text;
-                                self.cursor += 1;
-                            }
-                        }
-                    }
-                    _ => {}
                 }
-            }
+                _ => {}
+            },
         }
         self.focus(root, root.is_focused(self.element_id))?;
         Ok(None)
     }
 }
-

@@ -15,11 +15,11 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use crate::ui::forms::TextArea;
 use crate::ui::forms::textarea::GapBuffer;
 use crate::ui::forms::textarea::GapBufferIterator;
-use crate::ui::forms::WrbFormEvent;
+use crate::ui::forms::TextArea;
 use crate::ui::forms::WrbForm;
+use crate::ui::forms::WrbFormEvent;
 
 use crate::ui::Root;
 use crate::ui::SceneGraph;
@@ -43,17 +43,23 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     assert_eq!(gb.gap, 4);
     assert_eq!(gb.cursor, 6);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, 'o' as u32, ' ' as u32, 0, 0, 0, 0]);
+    assert_eq!(
+        gb.buffer,
+        vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, 'o' as u32, ' ' as u32, 0, 0, 0, 0]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hello ");
 
     gb.left();
     gb.left();
-    
+
     assert_eq!(gb.len(), 6);
     assert_eq!(gb.gap, 4);
     assert_eq!(gb.cursor, 4);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, 0, 0, 0, 0, 'o' as u32, ' ' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, 0, 0, 0, 0, 'o' as u32, ' ' as u32]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hello ");
 
     gb.insert(' ');
@@ -63,26 +69,44 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     assert_eq!(gb.gap, 2);
     assert_eq!(gb.cursor, 6);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 0, 0, 'o' as u32, ' ' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 0, 0,
+            'o' as u32, ' ' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell no ");
 
     gb.right();
     gb.right();
-    
+
     assert_eq!(gb.len(), 8);
     assert_eq!(gb.gap, 2);
     assert_eq!(gb.cursor, 8);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, ' ' as u32, 0, 0]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32,
+            ' ' as u32, 0, 0
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell no ");
 
     gb.left();
-    
+
     assert_eq!(gb.len(), 8);
     assert_eq!(gb.gap, 2);
     assert_eq!(gb.cursor, 7);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, 0, 0, ' ' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, 0,
+            0, ' ' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell no ");
 
     gb.insert('p');
@@ -92,7 +116,13 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     assert_eq!(gb.gap, 0);
     assert_eq!(gb.cursor, 9);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, ' ' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32,
+            'p' as u32, 'e' as u32, ' ' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell nope ");
 
     // left/right on a full buffer
@@ -101,31 +131,55 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     assert_eq!(gb.gap, 0);
     assert_eq!(gb.cursor, 8);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, ' ' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32,
+            'p' as u32, 'e' as u32, ' ' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell nope ");
-    
+
     gb.left();
     assert_eq!(gb.len(), 10);
     assert_eq!(gb.gap, 0);
     assert_eq!(gb.cursor, 7);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, ' ' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32,
+            'p' as u32, 'e' as u32, ' ' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell nope ");
-    
+
     gb.right();
     assert_eq!(gb.len(), 10);
     assert_eq!(gb.gap, 0);
     assert_eq!(gb.cursor, 8);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, ' ' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32,
+            'p' as u32, 'e' as u32, ' ' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell nope ");
-    
+
     gb.right();
     assert_eq!(gb.len(), 10);
     assert_eq!(gb.gap, 0);
     assert_eq!(gb.cursor, 9);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, ' ' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32,
+            'p' as u32, 'e' as u32, ' ' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell nope ");
 
     // right overflow
@@ -136,30 +190,48 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     assert_eq!(gb.gap, 0);
     assert_eq!(gb.cursor, 10);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, ' ' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32,
+            'p' as u32, 'e' as u32, ' ' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell nope ");
 
     // left overflow
     for _ in 0..11 {
         gb.left();
     }
-    
+
     assert_eq!(gb.len(), 10);
     assert_eq!(gb.gap, 0);
     assert_eq!(gb.cursor, 0);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, ' ' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32,
+            'p' as u32, 'e' as u32, ' ' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell nope ");
 
     for _ in 0..11 {
         gb.right();
     }
-    
+
     assert_eq!(gb.len(), 10);
     assert_eq!(gb.gap, 0);
     assert_eq!(gb.cursor, 10);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, ' ' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32,
+            'p' as u32, 'e' as u32, ' ' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell nope ");
 
     gb.left();
@@ -167,7 +239,13 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     assert_eq!(gb.gap, 0);
     assert_eq!(gb.cursor, 9);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, ' ' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32,
+            'p' as u32, 'e' as u32, ' ' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell nope ");
 
     // realloc
@@ -176,7 +254,13 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     assert_eq!(gb.gap, 9);
     assert_eq!(gb.cursor, 10);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, '!' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, ' ' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32,
+            'p' as u32, 'e' as u32, '!' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, ' ' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell nope! ");
 
     gb.right();
@@ -184,7 +268,13 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     assert_eq!(gb.gap, 9);
     assert_eq!(gb.cursor, 11);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, '!' as u32, ' ' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32,
+            'p' as u32, 'e' as u32, '!' as u32, ' ' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell nope! ");
 
     gb.backspace();
@@ -192,7 +282,13 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     assert_eq!(gb.gap, 10);
     assert_eq!(gb.cursor, 10);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, '!' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, ' ' as u32, 'n' as u32, 'o' as u32,
+            'p' as u32, 'e' as u32, '!' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell nope!");
 
     gb.left();
@@ -201,12 +297,18 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     gb.left();
     gb.left();
     gb.left();
-    
+
     assert_eq!(gb.len(), 10);
     assert_eq!(gb.gap, 10);
     assert_eq!(gb.cursor, 4);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, '!' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, '!' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hell nope!");
 
     gb.backspace();
@@ -214,7 +316,13 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     assert_eq!(gb.gap, 11);
     assert_eq!(gb.cursor, 3);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, '!' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ' ' as u32,
+            'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, '!' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "hel nope!");
 
     gb.insert('p');
@@ -222,7 +330,13 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     assert_eq!(gb.gap, 10);
     assert_eq!(gb.cursor, 4);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'p' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, '!' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'p' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ' ' as u32, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, '!' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "help nope!");
 
     gb.delete();
@@ -230,28 +344,46 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     assert_eq!(gb.gap, 11);
     assert_eq!(gb.cursor, 4);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'p' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, '!' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'p' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            'n' as u32, 'o' as u32, 'p' as u32, 'e' as u32, '!' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "helpnope!");
-    
+
     gb.delete();
     assert_eq!(gb.len(), 8);
     assert_eq!(gb.gap, 12);
     assert_eq!(gb.cursor, 4);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'p' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'o' as u32, 'p' as u32, 'e' as u32, '!' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'p' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            'o' as u32, 'p' as u32, 'e' as u32, '!' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "helpope!");
 
     gb.right();
     gb.right();
     gb.right();
     gb.right();
-    
+
     gb.delete();
     assert_eq!(gb.len(), 7);
     assert_eq!(gb.gap, 13);
     assert_eq!(gb.cursor, 7);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 'p' as u32, 'o' as u32, 'p' as u32, 'e' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'p' as u32, 'o' as u32, 'p' as u32, 'e' as u32, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "helpope");
 
     gb.left();
@@ -263,7 +395,13 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     assert_eq!(gb.gap, 13);
     assert_eq!(gb.cursor, 3);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'p' as u32, 'o' as u32, 'p' as u32, 'e' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'p' as u32,
+            'o' as u32, 'p' as u32, 'e' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "helpope");
 
     gb.replace('i');
@@ -271,7 +409,13 @@ fn test_gapbuffer_insert_backspace_delete_replace_left_right_ops() {
     assert_eq!(gb.gap, 13);
     assert_eq!(gb.cursor, 3);
     assert_eq!(gb.line_start, 0);
-    assert_eq!(gb.buffer, vec!['h' as u32, 'e' as u32, 'l' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'i' as u32, 'o' as u32, 'p' as u32, 'e' as u32]);
+    assert_eq!(
+        gb.buffer,
+        vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'i' as u32,
+            'o' as u32, 'p' as u32, 'e' as u32
+        ]
+    );
     assert_eq!(gb.to_string(usize::MAX), "heliope");
 }
 
@@ -288,12 +432,12 @@ fn test_gapbuffer_realloc() {
         gb.insert(c);
     }
     assert_eq!(gb.to_string(usize::MAX), text);
-    
+
     // insert at middle
     let mut gb = GapBuffer::new("", 10);
     assert_eq!(gb.len(), 0);
     assert_eq!(gb.gap, 10);
-    
+
     for (i, c) in text.chars().enumerate() {
         if i > 0 {
             for _ in 0..((i - 1) / 2) {
@@ -303,7 +447,6 @@ fn test_gapbuffer_realloc() {
         gb.insert(c);
     }
 }
-
 
 #[test]
 fn test_gapbuffer_line_start_end() {
@@ -355,45 +498,52 @@ fn test_gapbuffer_line_start_end() {
         while gb.cursor < initial_text.len() {
             if line_idx < line_offsets.len() {
                 if gb.cursor == line_offsets[line_idx] {
-                    assert_eq!(gb.line_start, line_offsets[line_idx], "line_idx = {}", line_idx);
+                    assert_eq!(
+                        gb.line_start, line_offsets[line_idx],
+                        "line_idx = {}",
+                        line_idx
+                    );
                     line_idx += 1;
                 }
-            }
-            else {
+            } else {
                 assert!(gb.chr().unwrap() != '\n');
             }
             gb.right();
         }
         if initial_text.len() > 0 {
             assert!(line_idx + 1 >= line_offsets.len());
-        }
-        else {
+        } else {
             assert_eq!(line_idx, 0);
         }
         if line_idx >= line_offsets.len() {
             line_idx = line_offsets.len() - 1
         }
         assert_eq!(gb.cursor, initial_text.len());
-        assert_eq!(gb.line_start, line_offsets[line_idx], "line_idx = {}", line_idx);
+        assert_eq!(
+            gb.line_start, line_offsets[line_idx],
+            "line_idx = {}",
+            line_idx
+        );
 
         // line_start updates with left()
         let mut done = false;
         while gb.cursor > 0 {
             if !done {
                 if gb.cursor == line_offsets[line_idx] {
-                    assert_eq!(gb.line_start, line_offsets[line_idx], "line_idx = {}", line_idx);
+                    assert_eq!(
+                        gb.line_start, line_offsets[line_idx],
+                        "line_idx = {}",
+                        line_idx
+                    );
                     if line_idx > 0 {
                         line_idx -= 1;
-                    }
-                    else {
+                    } else {
                         done = true;
                     }
-                }
-                else if gb.cursor + 1 == line_offsets[line_idx] {
+                } else if gb.cursor + 1 == line_offsets[line_idx] {
                     assert!(gb.chr().is_none() || gb.chr().unwrap() == '\n');
                 }
-            }
-            else {
+            } else {
                 if gb.cursor + gb.gap < gb.buffer.len() {
                     assert!(gb.chr().is_none() || gb.chr().unwrap() != '\n');
                 }
@@ -455,8 +605,7 @@ fn test_gapbuffer_up_down() {
                 assert_eq!(gb.line_start, line_offsets[line_idx]);
                 line_idx += 1;
             }
-        }
-        else {
+        } else {
             assert!(gb.chr().unwrap() != '\n');
         }
         gb.right();
@@ -483,7 +632,7 @@ fn test_gapbuffer_up_down() {
         gb.line_end();
         gb.right();
     }
-    
+
     // reset
     while gb.cursor > 0 {
         gb.left();
@@ -518,7 +667,9 @@ fn test_textarea_handle_event() {
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
 
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('h'))).unwrap();
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('h')))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "h");
     assert_eq!(textarea.cursor(), 1);
     assert_eq!(textarea.insert(), true);
@@ -530,127 +681,169 @@ fn test_textarea_handle_event() {
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len());
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
-    
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Left)).unwrap();
+
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Left))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello world");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len() - 1);
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
 
     for _ in 0..100 {
-        textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Left)).unwrap();
+        textarea
+            .handle_event(&mut root, WrbFormEvent::Keypress(Key::Left))
+            .unwrap();
     }
     assert_eq!(textarea.text(usize::MAX), "hello world");
     assert_eq!(textarea.cursor(), 0);
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
 
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::End)).unwrap();
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::End))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello world");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len());
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
-    
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Home)).unwrap();
+
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Home))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello world");
     assert_eq!(textarea.cursor(), 0);
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
 
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::End)).unwrap();
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::End))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello world");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len());
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
 
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('!'))).unwrap();
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('!')))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello world!");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len());
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
-        
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Left)).unwrap();
+
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Left))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello world!");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len() - 1);
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
-    
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Left)).unwrap();
+
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Left))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello world!");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len() - 2);
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
 
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('f'))).unwrap();
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('f')))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello worlfd!");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len() - 2);
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
 
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Home)).unwrap();
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Home))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello worlfd!");
     assert_eq!(textarea.cursor(), 0);
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
-    
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::End)).unwrap();
+
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::End))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello worlfd!");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len());
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
-    
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Backspace)).unwrap();
+
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Backspace))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello worlfd");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len());
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
-    
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Left)).unwrap();
+
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Left))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello worlfd");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len() - 1);
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
-    
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Left)).unwrap();
+
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Left))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello worlfd");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len() - 2);
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
-   
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Delete)).unwrap();
+
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Delete))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello world");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len() - 1);
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
 
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Insert)).unwrap();
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Insert))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello world");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len() - 1);
     assert_eq!(textarea.insert(), false);
     assert_eq!(textarea.scroll(), 0);
-    
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Char(' '))).unwrap();
+
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Char(' ')))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello worl ");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len());
     assert_eq!(textarea.insert(), false);
     assert_eq!(textarea.scroll(), 0);
 
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Insert)).unwrap();
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Insert))
+        .unwrap();
     assert_eq!(textarea.text(usize::MAX), "hello worl ");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len());
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
 
     for _i in 0..5 {
-        textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('\n'))).unwrap();
+        textarea
+            .handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('\n')))
+            .unwrap();
         assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len());
         assert_eq!(textarea.insert(), true);
-        
-        textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('a'))).unwrap();
+
+        textarea
+            .handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('a')))
+            .unwrap();
         assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len());
         assert_eq!(textarea.insert(), true);
     }
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('b'))).unwrap();
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Char('b')))
+        .unwrap();
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len());
     assert_eq!(textarea.insert(), true);
 
@@ -660,22 +853,28 @@ fn test_textarea_handle_event() {
     assert_eq!(textarea.scroll(), 12);
 
     for _i in 0..11 {
-        textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Left)).unwrap();
+        textarea
+            .handle_event(&mut root, WrbFormEvent::Keypress(Key::Left))
+            .unwrap();
     }
-    
+
     assert_eq!(textarea.text(usize::MAX), "hello worl \na\na\na\na\nab");
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len() - 11);
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 0);
-    
+
     for _i in 0..8 {
-        textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Right)).unwrap();
+        textarea
+            .handle_event(&mut root, WrbFormEvent::Keypress(Key::Right))
+            .unwrap();
         assert_eq!(textarea.text(usize::MAX), "hello worl \na\na\na\na\nab");
         assert_eq!(textarea.insert(), true);
         assert_eq!(textarea.scroll(), 0);
     }
-    
-    textarea.handle_event(&mut root, WrbFormEvent::Keypress(Key::Right)).unwrap();
+
+    textarea
+        .handle_event(&mut root, WrbFormEvent::Keypress(Key::Right))
+        .unwrap();
     assert_eq!(textarea.cursor(), textarea.text(usize::MAX).len() - 2);
     assert_eq!(textarea.insert(), true);
     assert_eq!(textarea.scroll(), 12);

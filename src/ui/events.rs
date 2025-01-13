@@ -17,36 +17,36 @@
 
 use lzma_rs;
 
-use std::convert::TryInto;
-use std::sync::mpsc::{SyncSender, Receiver, sync_channel, TrySendError};
-use std::collections::HashSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::convert::TryInto;
 use std::io::{BufRead, Read, Write};
 use std::ops::Deref;
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 
 use crate::ui::Error;
 use crate::ui::Renderer;
 
-use crate::vm::storage::WritableWrbStore;
 use crate::util::{DEFAULT_CHAIN_ID, DEFAULT_WRB_CLARITY_VERSION, DEFAULT_WRB_EPOCH};
+use crate::vm::storage::WritableWrbStore;
 
 use clarity::vm::analysis;
 use clarity::vm::ast::ASTRules;
 use clarity::vm::contexts::OwnedEnvironment;
 use clarity::vm::costs::LimitedCostTracker;
 use clarity::vm::events::{SmartContractEventData, StacksTransactionEvent};
-use clarity::vm::types::QualifiedContractIdentifier;
-use clarity::vm::types::StandardPrincipalData;
-use clarity::vm::types::{CharType, SequenceData, Value, UTF8Data};
-use clarity::vm::SymbolicExpression;
-use clarity::vm::types::FunctionType;
-use clarity::vm::types::FixedFunction;
-use clarity::vm::types::TypeSignature;
-use clarity::vm::ClarityName;
-use clarity::vm::types::TupleData;
-use clarity::vm::types::TypeSignature::SequenceType;
-use clarity::vm::types::SequenceSubtype;
 use clarity::vm::types::BufferLength;
+use clarity::vm::types::FixedFunction;
+use clarity::vm::types::FunctionType;
+use clarity::vm::types::QualifiedContractIdentifier;
+use clarity::vm::types::SequenceSubtype;
+use clarity::vm::types::StandardPrincipalData;
+use clarity::vm::types::TupleData;
+use clarity::vm::types::TypeSignature;
+use clarity::vm::types::TypeSignature::SequenceType;
+use clarity::vm::types::{CharType, SequenceData, UTF8Data, Value};
+use clarity::vm::ClarityName;
+use clarity::vm::SymbolicExpression;
 
 use crate::vm::ClarityStorage;
 
@@ -55,21 +55,21 @@ use crate::vm::{
     ClarityVM, WRBLIB_CODE,
 };
 
+use clarity::vm::database::{HeadersDB, NULL_BURN_STATE_DB};
 use clarity::vm::errors::Error as clarity_error;
 use clarity::vm::errors::InterpreterError;
-use clarity::vm::database::{HeadersDB, NULL_BURN_STATE_DB};
 
-use stacks_common::util::hash;
-use stacks_common::util::hash::Hash160;
-use stacks_common::util::hash::to_hex;
-use stacks_common::util::sleep_ms;
 use stacks_common::util::get_epoch_time_ms;
+use stacks_common::util::hash;
+use stacks_common::util::hash::to_hex;
+use stacks_common::util::hash::Hash160;
+use stacks_common::util::sleep_ms;
 
-use crate::ui::root::Root;
+use crate::ui::forms::WrbFormTypes;
 use crate::ui::root::FrameUpdate;
+use crate::ui::root::Root;
 use crate::ui::scanline::Scanline;
 use crate::ui::viewport::Viewport;
-use crate::ui::forms::WrbFormTypes;
 
 /// Events for the main wrb event loop
 #[derive(Debug, Clone, PartialEq)]
@@ -83,7 +83,11 @@ pub enum WrbEvent {
     /// A resize happened
     Resize(u64, u64),
     /// A UI event happened.
-    UI { element_type: WrbFormTypes, element_id: u128, event_payload: Value }
+    UI {
+        element_type: WrbFormTypes,
+        element_id: u128,
+        event_payload: Value,
+    },
 }
 
 impl WrbEvent {
@@ -103,7 +107,11 @@ impl WrbEvent {
             Self::Close => u128::MAX,
             Self::Timer => u128::MAX,
             Self::Resize(_, _) => u128::MAX,
-            Self::UI { element_type: _, element_id, .. } => *element_id
+            Self::UI {
+                element_type: _,
+                element_id,
+                ..
+            } => *element_id,
         }
     }
 
@@ -113,30 +121,43 @@ impl WrbEvent {
             Self::Close => 0,
             Self::Timer => 1,
             Self::Resize(_, _) => 2,
-            Self::UI { element_type, element_id: _, event_payload: _ } => element_type.as_u128()
+            Self::UI {
+                element_type,
+                element_id: _,
+                event_payload: _,
+            } => element_type.as_u128(),
         }
     }
 
     pub fn event_payload(&self) -> Vec<u8> {
         match self {
-            Self::Open | Self::Close | Self::Timer => Value::none().serialize_to_vec().expect("FATAL: could not serialize `none`"),
-            Self::Resize(rows, cols) => {
-                Value::Tuple(TupleData::from_data(vec![
-                    ("rows".into(), Value::UInt(u128::from(*rows))),
-                    ("cols".into(), Value::UInt(u128::from(*cols)))
-                ])
-                .expect("FATAL: could not produce rows/cols tuple data"))
+            Self::Open | Self::Close | Self::Timer => Value::none()
                 .serialize_to_vec()
-                .expect("FATAL: could not serialize rows/cols tuple")
-            },
-            Self::UI { element_type, element_id, event_payload } => event_payload.serialize_to_vec().expect(&format!("FATAL: in element {} type {:?}: could not serialize `{:?}`", element_id, element_type, &event_payload))
+                .expect("FATAL: could not serialize `none`"),
+            Self::Resize(rows, cols) => Value::Tuple(
+                TupleData::from_data(vec![
+                    ("rows".into(), Value::UInt(u128::from(*rows))),
+                    ("cols".into(), Value::UInt(u128::from(*cols))),
+                ])
+                .expect("FATAL: could not produce rows/cols tuple data"),
+            )
+            .serialize_to_vec()
+            .expect("FATAL: could not serialize rows/cols tuple"),
+            Self::UI {
+                element_type,
+                element_id,
+                event_payload,
+            } => event_payload.serialize_to_vec().expect(&format!(
+                "FATAL: in element {} type {:?}: could not serialize `{:?}`",
+                element_id, element_type, &event_payload
+            )),
         }
     }
 }
 
 pub enum WrbFrameData {
     Root(Root),
-    Update(FrameUpdate)
+    Update(FrameUpdate),
 }
 
 pub struct WrbRenderEventChannels {
@@ -159,7 +180,7 @@ impl WrbRenderEventChannels {
     pub fn next_frame(&self, frame: Root) -> bool {
         self.frames.send(WrbFrameData::Root(frame)).is_ok()
     }
-    
+
     /// Send the next frame update, but block
     /// Return true if sent; false if the channel closed
     pub fn next_frame_update(&self, frame_update: FrameUpdate) -> bool {
@@ -170,7 +191,7 @@ impl WrbRenderEventChannels {
     pub fn poll_next_event(&self) -> Option<WrbEvent> {
         self.events.try_recv().ok()
     }
-    
+
     /// Try and receive the next event (blocking)
     pub fn next_event(&self) -> Option<WrbEvent> {
         self.events.recv().ok()
@@ -179,7 +200,7 @@ impl WrbRenderEventChannels {
 
 pub struct WrbUIEventChannels {
     events: SyncSender<WrbEvent>,
-    frames: Receiver<WrbFrameData>
+    frames: Receiver<WrbFrameData>,
 }
 
 impl WrbUIEventChannels {
@@ -195,7 +216,7 @@ impl WrbUIEventChannels {
     pub fn next_event(&self, event: WrbEvent) -> bool {
         self.events.send(event).is_ok()
     }
-    
+
     /// Get the next root pane to render, blocking
     pub fn next_frame(&self) -> Option<WrbFrameData> {
         self.frames.recv().ok()
@@ -226,11 +247,11 @@ impl WrbChannels {
 
         let ui_channels = WrbUIEventChannels {
             events: events_channel_sender,
-            frames: root_channel_receiver
+            frames: root_channel_receiver,
         };
         let render_channels = WrbRenderEventChannels {
             events: events_channel_receiver,
-            frames: root_channel_sender
+            frames: root_channel_sender,
         };
         (render_channels, ui_channels)
     }
@@ -238,21 +259,26 @@ impl WrbChannels {
 
 impl Renderer {
     /// Go find the name of the event loop function, and make sure it has the right type.
-    pub(crate) fn find_event_loop_function(&self, wrb_tx: &mut WritableWrbStore, headers_db: &dyn HeadersDB, main_code_id: &QualifiedContractIdentifier) -> Result<Option<String>, Error> {
+    pub(crate) fn find_event_loop_function(
+        &self,
+        wrb_tx: &mut WritableWrbStore,
+        headers_db: &dyn HeadersDB,
+        main_code_id: &QualifiedContractIdentifier,
+    ) -> Result<Option<String>, Error> {
         let event_loop_name = {
             let mainnet = wrb_tx.mainnet();
             let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
             db.begin();
-            let mut vm_env = OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+            let mut vm_env =
+                OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
 
             let qry = "(print (wrb-get-event-loop-name))";
-            let event_loop_name_opt = self.run_query_code(&mut vm_env, main_code_id, qry)?
+            let event_loop_name_opt = self
+                .run_query_code(&mut vm_env, main_code_id, qry)?
                 .pop()
                 .expect("FATAL: expected one result")
                 .expect_optional()?
-                .map(|name_val| {
-                    name_val.expect_ascii()
-                })
+                .map(|name_val| name_val.expect_ascii())
                 .transpose()?;
 
             let (mut db, _) = vm_env
@@ -266,25 +292,40 @@ impl Renderer {
             };
             event_loop_name
         };
-        let event_loop_clarity_name = ClarityName::try_from(event_loop_name.as_str()).map_err(|_| Error::Codec(format!("Invalid event loop function name '{}'", &event_loop_name)))?;
+        let event_loop_clarity_name =
+            ClarityName::try_from(event_loop_name.as_str()).map_err(|_| {
+                Error::Codec(format!(
+                    "Invalid event loop function name '{}'",
+                    &event_loop_name
+                ))
+            })?;
 
         // type-check it
         let mut analysis_db = wrb_tx.get_analysis_db();
         analysis_db.begin();
         let analysis = analysis_db
-            .load_contract(main_code_id, &DEFAULT_WRB_EPOCH).map_err(|e| clarity_error::Unchecked(e.err))?
-            .expect(&format!("FATAL: no contract analysis for main code body '{}'", main_code_id));
-        analysis_db.roll_back()
+            .load_contract(main_code_id, &DEFAULT_WRB_EPOCH)
+            .map_err(|e| clarity_error::Unchecked(e.err))?
+            .expect(&format!(
+                "FATAL: no contract analysis for main code body '{}'",
+                main_code_id
+            ));
+        analysis_db
+            .roll_back()
             .map_err(|e| clarity_error::Unchecked(e.err))?;
 
-        let func = if let Some(f) = analysis.read_only_function_types.get(&event_loop_clarity_name) {
+        let func = if let Some(f) = analysis
+            .read_only_function_types
+            .get(&event_loop_clarity_name)
+        {
             f
-        }
-        else if let Some(f) = analysis.public_function_types.get(&event_loop_clarity_name) {
+        } else if let Some(f) = analysis.public_function_types.get(&event_loop_clarity_name) {
             f
-        }
-        else {
-            return Err(Error::Page(format!("No such event loop function '{}'", &event_loop_name)));
+        } else {
+            return Err(Error::Page(format!(
+                "No such event loop function '{}'",
+                &event_loop_name
+            )));
         };
 
         match func {
@@ -293,20 +334,35 @@ impl Renderer {
                     return Err(Error::Page(format!("Function '{}' expects 4 arguments ((element-type uint) (element-id uint) (event-type uint) (event-payload (buff 1024)), but has {}", &event_loop_name, args.len())));
                 }
 
-                let buff1024 = SequenceType(SequenceSubtype::BufferType(BufferLength::try_from(1024u32).expect("BUG: Legal Clarity buffer length marked invalid")));
+                let buff1024 = SequenceType(SequenceSubtype::BufferType(
+                    BufferLength::try_from(1024u32)
+                        .expect("BUG: Legal Clarity buffer length marked invalid"),
+                ));
 
                 // arguments must be uints
                 for (i, arg) in args.iter().enumerate() {
-                    if i < 3 && !arg.signature.admits_type(&DEFAULT_WRB_EPOCH, &TypeSignature::UIntType).unwrap_or(false) {
+                    if i < 3
+                        && !arg
+                            .signature
+                            .admits_type(&DEFAULT_WRB_EPOCH, &TypeSignature::UIntType)
+                            .unwrap_or(false)
+                    {
                         return Err(Error::Page(format!("Function '{}' expects uint arguments for the first three args of ((element-type uint) (element-id uint) (event-type uint) (event-payload (buff 1024))", &event_loop_name)));
-                    }
-                    else if i == 3 && !arg.signature.admits_type(&DEFAULT_WRB_EPOCH, &buff1024).unwrap_or(false) {
+                    } else if i == 3
+                        && !arg
+                            .signature
+                            .admits_type(&DEFAULT_WRB_EPOCH, &buff1024)
+                            .unwrap_or(false)
+                    {
                         return Err(Error::Page(format!("Function '{}' expects (buff 1024) arguments the last arg of ((element-type uint) (element-id uint) (event-type uint) (event-payload (buff 1024))", &event_loop_name)));
                     }
                 }
             }
             _ => {
-                return Err(Error::Page(format!("Function '{}' is not a fixed function", &event_loop_name)));
+                return Err(Error::Page(format!(
+                    "Function '{}' is not a fixed function",
+                    &event_loop_name
+                )));
             }
         }
 
@@ -314,15 +370,22 @@ impl Renderer {
     }
 
     /// Go find event subscriptions.
-    pub(crate) fn find_event_subscriptions(&self, wrb_tx: &mut WritableWrbStore, headers_db: &dyn HeadersDB, main_code_id: &QualifiedContractIdentifier) -> Result<HashSet<u128>, Error> {
+    pub(crate) fn find_event_subscriptions(
+        &self,
+        wrb_tx: &mut WritableWrbStore,
+        headers_db: &dyn HeadersDB,
+        main_code_id: &QualifiedContractIdentifier,
+    ) -> Result<HashSet<u128>, Error> {
         let mainnet = wrb_tx.mainnet();
         let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
         db.begin();
-        let mut vm_env = OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+        let mut vm_env =
+            OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
 
         let num_subscriptions = {
             let qry = "(print (wrb-get-num-event-subscriptions))";
-            let num_subscriptions = self.run_query_code(&mut vm_env, main_code_id, qry)?
+            let num_subscriptions = self
+                .run_query_code(&mut vm_env, main_code_id, qry)?
                 .pop()
                 .expect("FATAL: expected one result")
                 .expect_u128()?;
@@ -333,7 +396,8 @@ impl Renderer {
         let mut subscriptions = HashSet::new();
         for idx in 0..num_subscriptions {
             let qry = format!("(print (wrb-get-event-subscription u{}))", idx);
-            let event_type = self.run_query_code(&mut vm_env, main_code_id, &qry)?
+            let event_type = self
+                .run_query_code(&mut vm_env, main_code_id, &qry)?
                 .pop()
                 .expect("FATAL: expected one result")
                 .expect_optional()?
@@ -352,15 +416,22 @@ impl Renderer {
     }
 
     /// Go get the event loop delay
-    pub(crate) fn find_event_loop_delay(&self, wrb_tx: &mut WritableWrbStore, headers_db: &dyn HeadersDB, main_code_id: &QualifiedContractIdentifier) -> Result<u64, Error> {
+    pub(crate) fn find_event_loop_delay(
+        &self,
+        wrb_tx: &mut WritableWrbStore,
+        headers_db: &dyn HeadersDB,
+        main_code_id: &QualifiedContractIdentifier,
+    ) -> Result<u64, Error> {
         let mainnet = wrb_tx.mainnet();
         let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
         db.begin();
-        let mut vm_env = OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+        let mut vm_env =
+            OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
 
         let delay_val = {
             let qry = "(print (wrb-get-event-loop-time))";
-            let mut delay_ms = self.run_query_code(&mut vm_env, main_code_id, &qry)?
+            let mut delay_ms = self
+                .run_query_code(&mut vm_env, main_code_id, &qry)?
                 .pop()
                 .expect("FATAL: expected one result")
                 .expect_u128()?;
@@ -381,14 +452,30 @@ impl Renderer {
 
     /// Run the event loop with a given event.
     /// Returns whatever the event loop function returns.
-    pub(crate) fn run_one_event_loop_pass(&self, wrb_tx: &mut WritableWrbStore, headers_db: &dyn HeadersDB, main_code_id: &QualifiedContractIdentifier, event_handler: &str, event: WrbEvent) -> Result<Value, Error> {
+    pub(crate) fn run_one_event_loop_pass(
+        &self,
+        wrb_tx: &mut WritableWrbStore,
+        headers_db: &dyn HeadersDB,
+        main_code_id: &QualifiedContractIdentifier,
+        event_handler: &str,
+        event: WrbEvent,
+    ) -> Result<Value, Error> {
         let mainnet = wrb_tx.mainnet();
         let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
         db.begin();
-        let mut vm_env = OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+        let mut vm_env =
+            OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
 
-        let runner = format!("(print ({} u{} u{} u{} 0x{}))", event_handler, event.element_type(), event.element_id(), event.event_type(), to_hex(&event.event_payload()));
-        let res = self.run_query_code(&mut vm_env, main_code_id, &runner)?
+        let runner = format!(
+            "(print ({} u{} u{} u{} 0x{}))",
+            event_handler,
+            event.element_type(),
+            event.element_id(),
+            event.event_type(),
+            to_hex(&event.event_payload())
+        );
+        let res = self
+            .run_query_code(&mut vm_env, main_code_id, &runner)?
             .last()
             .cloned()
             .expect("FATAL: expected one result");
@@ -413,7 +500,12 @@ impl Renderer {
     /// Run the main loop in an interactive setting
     /// Returns the last thing the event loop returns.
     /// Returns None if there's no event loop function defined.
-    pub fn run_page(&self, vm: &mut ClarityVM, compressed_input: &[u8], channels: WrbRenderEventChannels) -> Result<Option<Value>, Error> {
+    pub fn run_page(
+        &self,
+        vm: &mut ClarityVM,
+        compressed_input: &[u8],
+        channels: WrbRenderEventChannels,
+    ) -> Result<Option<Value>, Error> {
         let input = self.read_as_ascii(&mut &compressed_input[..])?;
         let linked_code = Self::wrb_link(&input);
         let main_code_id = vm.get_code_id();
@@ -427,20 +519,24 @@ impl Renderer {
         wrb_tx.commit()?;
 
         let mut wrb_tx = vm.begin_page_load(&code_hash)?;
-        
+
         // TODO: if any modules are declared, load them up and instantiate them here
 
         // set up event loop
-        let event_loop_func_opt = self.find_event_loop_function(&mut wrb_tx, &headers_db, &main_code_id)?;
-        let event_subscriptions = self.find_event_subscriptions(&mut wrb_tx, &headers_db, &main_code_id)?; 
-        let event_loop_delay = self.find_event_loop_delay(&mut wrb_tx, &headers_db, &main_code_id)?;
+        let event_loop_func_opt =
+            self.find_event_loop_function(&mut wrb_tx, &headers_db, &main_code_id)?;
+        let event_subscriptions =
+            self.find_event_subscriptions(&mut wrb_tx, &headers_db, &main_code_id)?;
+        let event_loop_delay =
+            self.find_event_loop_delay(&mut wrb_tx, &headers_db, &main_code_id)?;
 
         let Some(event_loop_func) = event_loop_func_opt else {
             wrb_debug!("Running single-pass event loop");
             // done
             let mut db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
             db.begin();
-            let mut vm_env = OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+            let mut vm_env =
+                OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
             let root = self.make_root(&mut vm_env, &main_code_id)?;
             let (mut db, _) = vm_env
                 .destruct()
@@ -455,26 +551,34 @@ impl Renderer {
 
         let mut event_loop_result = None;
         let has_timer_event = event_subscriptions.contains(&WrbEvent::Timer.event_type());
-        wrb_debug!("Begin event loop with event_loop_delay = {}ms", event_loop_delay);
+        wrb_debug!(
+            "Begin event loop with event_loop_delay = {}ms",
+            event_loop_delay
+        );
 
         let mut will_close = false;
-        let mut root_viewports : Option<Vec<Viewport>> = None;
+        let mut root_viewports: Option<Vec<Viewport>> = None;
         while !will_close {
             let Some(next_event) = channels.next_event() else {
                 break;
             };
-            
+
             // if this was a request to close, then exit
             will_close = matches!(next_event, WrbEvent::Close);
-           
+
             if event_subscriptions.len() > 0 {
                 let event_type_u128 = next_event.event_type();
-                if !event_subscriptions.contains(&event_type_u128) && !matches!(next_event, WrbEvent::Open) {
-                    wrb_debug!("Not subscribed to event type {:?}", &next_event.event_type());
+                if !event_subscriptions.contains(&event_type_u128)
+                    && !matches!(next_event, WrbEvent::Open)
+                {
+                    wrb_debug!(
+                        "Not subscribed to event type {:?}",
+                        &next_event.event_type()
+                    );
                     continue;
                 }
             }
-           
+
             wrb_debug!("Got event: {:?}", &next_event);
 
             // got an event we can handle
@@ -483,7 +587,8 @@ impl Renderer {
                 let mut db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
                 db.begin();
 
-                let mut vm_env = OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH); 
+                let mut vm_env =
+                    OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
                 let root_update = self.make_root_update(&mut vm_env, &main_code_id, viewports)?;
 
                 let (mut db, _) = vm_env
@@ -497,18 +602,17 @@ impl Renderer {
                     wrb_debug!("Exiting event loop due to broken frame channel");
                     break;
                 }
-            }
-            else {
+            } else {
                 // make next whole frame
                 let mut db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
                 db.begin();
 
-                let mut vm_env = OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH); 
+                let mut vm_env =
+                    OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
                 let mut root = self.make_root(&mut vm_env, &main_code_id)?;
                 root.frame_delay = if has_timer_event {
                     Some(event_loop_delay)
-                }
-                else {
+                } else {
                     None
                 };
 
@@ -531,11 +635,17 @@ impl Renderer {
             }
 
             wrb_debug!("Running event loop pass");
-            event_loop_result = match self.run_one_event_loop_pass(&mut wrb_tx, &headers_db, &main_code_id, &event_loop_func, next_event) {
+            event_loop_result = match self.run_one_event_loop_pass(
+                &mut wrb_tx,
+                &headers_db,
+                &main_code_id,
+                &event_loop_func,
+                next_event,
+            ) {
                 Ok(result) => {
                     wrb_debug!("Event loop returned: {:?}", &result);
                     Some(result)
-                },
+                }
                 Err(e) => {
                     wrb_warn!("Failed to run event loop: {:?}", &e);
                     break;

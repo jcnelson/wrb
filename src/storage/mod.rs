@@ -15,29 +15,29 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::io::{Read, Write};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::io::{Read, Write};
 use std::net::SocketAddr;
 
-use stacks_common::util::secp256k1::Secp256k1PublicKey;
 use stacks_common::util::secp256k1::Secp256k1PrivateKey;
+use stacks_common::util::secp256k1::Secp256k1PublicKey;
 
-use stacks_common::codec::StacksMessageCodec;
-use stacks_common::codec::{write_next, read_next};
 use stacks_common::codec::Error as CodecError;
-use stacks_common::util::hash::Hash160;
-use stacks_common::util::hash::{to_hex, hex_bytes};
+use stacks_common::codec::StacksMessageCodec;
+use stacks_common::codec::{read_next, write_next};
 use stacks_common::types::chainstate::StacksAddress;
+use stacks_common::util::hash::Hash160;
+use stacks_common::util::hash::{hex_bytes, to_hex};
 
 use crate::runner::Error as RuntimeError;
 
 use libstackerdb::{SlotMetadata, StackerDBChunkAckData, StackerDBChunkData};
 
 use serde;
-use serde::{Serialize, Deserialize};
 use serde::de::SeqAccess;
 use serde::ser::SerializeSeq;
+use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 pub mod tests;
@@ -50,7 +50,7 @@ pub const WRBPOD_SLICES_VERSION: u8 = 0;
 pub const WRBPOD_SUPERBLOCK_VERSION: u8 = 0;
 pub const WRBPOD_APP_STATE_VERSION: u8 = 0;
 
-pub const WRBPOD_MAX_SLOTS : u32 = 4096;    // same as maximum stackerdb size in the stacks node
+pub const WRBPOD_MAX_SLOTS: u32 = 4096; // same as maximum stackerdb size in the stacks node
 pub const WRBPOD_CHUNK_MAX_SIZE: u32 = libstackerdb::STACKERDB_MAX_CHUNK_SIZE;
 
 /// Chunks that make up a slot in a stackerdb.
@@ -61,7 +61,7 @@ pub struct WrbpodSlices {
     /// Slices
     #[serde(
         serialize_with = "wrbpod_slices_serialize",
-        deserialize_with = "wrbpod_slices_deserialize",
+        deserialize_with = "wrbpod_slices_deserialize"
     )]
     slices: Vec<Vec<u8>>,
     /// Slice indexes (maps clarity ID to slice index)
@@ -96,8 +96,8 @@ impl<'de> serde::de::Visitor<'de> for WrbpodSlicesDeserializeVisitor {
     }
 
     fn visit_seq<S>(self, mut seq: S) -> Result<Self::Value, S::Error>
-    where 
-        S: SeqAccess<'de>
+    where
+        S: SeqAccess<'de>,
     {
         let mut slices = vec![];
         while let Some(slice_hex) = seq.next_element::<String>()? {
@@ -135,14 +135,18 @@ pub struct WrbpodSuperblock {
 }
 
 /// StackerDB client trait (so we can mock it in testing)
-pub trait StackerDBClient : Send {
+pub trait StackerDBClient: Send {
     fn list_chunks(&mut self) -> Result<Vec<SlotMetadata>, RuntimeError>;
     fn get_chunks(
         &mut self,
         slots_and_versions: &[(u32, u32)],
     ) -> Result<Vec<Option<Vec<u8>>>, RuntimeError>;
-    fn get_latest_chunks(&mut self, slot_ids: &[u32]) -> Result<Vec<Option<Vec<u8>>>, RuntimeError>;
-    fn put_chunk(&mut self, chunk: StackerDBChunkData) -> Result<StackerDBChunkAckData, RuntimeError>;
+    fn get_latest_chunks(&mut self, slot_ids: &[u32])
+        -> Result<Vec<Option<Vec<u8>>>, RuntimeError>;
+    fn put_chunk(
+        &mut self,
+        chunk: StackerDBChunkData,
+    ) -> Result<StackerDBChunkAckData, RuntimeError>;
     fn find_replicas(&mut self) -> Result<Vec<SocketAddr>, RuntimeError>;
     fn get_signers(&mut self) -> Result<Vec<StacksAddress>, RuntimeError>;
 }
@@ -172,7 +176,7 @@ pub enum Error {
     GetChunk(String),
     PutChunk(String),
     Overflow(String),
-    NoSuchChunk
+    NoSuchChunk,
 }
 
 impl From<RuntimeError> for Error {
@@ -209,13 +213,15 @@ impl StacksMessageCodec for WrbpodAppState {
 
 fn u128_consensus_serialize<W: Write>(fd: &mut W, value: u128) -> Result<(), CodecError> {
     let bytes = value.to_be_bytes();
-    fd.write_all(&bytes).map_err(|e| CodecError::SerializeError(format!("Failed to write u128: {:?}", &e)))?;
+    fd.write_all(&bytes)
+        .map_err(|e| CodecError::SerializeError(format!("Failed to write u128: {:?}", &e)))?;
     Ok(())
 }
-    
+
 fn u128_consensus_deserialize<R: Read>(fd: &mut R) -> Result<u128, CodecError> {
     let mut bytes = [0u8; 16];
-    fd.read_exact(&mut bytes).map_err(|e| CodecError::DeserializeError(format!("Failed to read u128: {:?}", &e)))?;
+    fd.read_exact(&mut bytes)
+        .map_err(|e| CodecError::DeserializeError(format!("Failed to read u128: {:?}", &e)))?;
     Ok(u128::from_be_bytes(bytes))
 }
 
@@ -224,10 +230,12 @@ impl StacksMessageCodec for WrbpodSlices {
         write_next(fd, &self.version)?;
 
         // write index
-        let count_u64 = u64::try_from(self.index.len()).map_err(|_| CodecError::SerializeError("Failed to convert index len to u64".into()))?;
+        let count_u64 = u64::try_from(self.index.len())
+            .map_err(|_| CodecError::SerializeError("Failed to convert index len to u64".into()))?;
         write_next(fd, &count_u64)?;
         for (id, idx) in self.index.iter() {
-            let idx_u64 = u64::try_from(*idx).map_err(|_| CodecError::SerializeError("Failed to convert usize to u64".into()))?;
+            let idx_u64 = u64::try_from(*idx)
+                .map_err(|_| CodecError::SerializeError("Failed to convert usize to u64".into()))?;
             u128_consensus_serialize(fd, *id)?;
             write_next(fd, &idx_u64)?;
         }
@@ -244,7 +252,7 @@ impl StacksMessageCodec for WrbpodSlices {
         let version: u8 = read_next(fd)?;
         encoded_size += 1;
 
-        let index_count : u64 = read_next(fd)?;
+        let index_count: u64 = read_next(fd)?;
         encoded_size += 8;
 
         let mut index = BTreeMap::new();
@@ -252,13 +260,17 @@ impl StacksMessageCodec for WrbpodSlices {
             let id = u128_consensus_deserialize(fd)?;
             encoded_size += 16;
 
-            let idx_u64 : u64 = read_next(fd)?;
+            let idx_u64: u64 = read_next(fd)?;
             encoded_size += 8;
 
             if idx_u64 >= index_count {
-                return Err(CodecError::DeserializeError("index exceeds number of slices".into()))?;
+                return Err(CodecError::DeserializeError(
+                    "index exceeds number of slices".into(),
+                ))?;
             }
-            let idx = usize::try_from(idx_u64).map_err(|_| CodecError::DeserializeError("Failed to convert u64 to usize".into()))?;
+            let idx = usize::try_from(idx_u64).map_err(|_| {
+                CodecError::DeserializeError("Failed to convert u64 to usize".into())
+            })?;
             if index.get(&id).is_some() {
                 return Err(CodecError::DeserializeError("duplicate slice ID".into()))?;
             }
@@ -266,7 +278,7 @@ impl StacksMessageCodec for WrbpodSlices {
         }
         let mut slices = vec![];
         for _ in 0..index_count {
-            let slice : Vec<u8> = read_next(fd)?;
+            let slice: Vec<u8> = read_next(fd)?;
             encoded_size += 4 + (u64::try_from(slice.len()).expect("slice too big"));
             slices.push(slice);
         }
@@ -277,7 +289,7 @@ impl StacksMessageCodec for WrbpodSlices {
             slices,
             dirty: false,
             encoded_size,
-            max_size: WRBPOD_CHUNK_MAX_SIZE.into()
+            max_size: WRBPOD_CHUNK_MAX_SIZE.into(),
         })
     }
 }
@@ -298,10 +310,11 @@ impl StacksMessageCodec for WrbpodSuperblock {
 
     fn consensus_deserialize<R: Read>(fd: &mut R) -> Result<Self, CodecError> {
         let version: u8 = read_next(fd)?;
-        let bns_names_bytes : Vec<Vec<u8>> = read_next(fd)?;
+        let bns_names_bytes: Vec<Vec<u8>> = read_next(fd)?;
         let mut bns_names = vec![];
         for bns_name_bytes in bns_names_bytes.into_iter() {
-            let bns_name = std::str::from_utf8(&bns_name_bytes).map_err(|_| CodecError::DeserializeError("BNS name is not UTF-8".into()))?;
+            let bns_name = std::str::from_utf8(&bns_name_bytes)
+                .map_err(|_| CodecError::DeserializeError("BNS name is not UTF-8".into()))?;
             if !bns_name.is_ascii() {
                 return Err(CodecError::DeserializeError("BNS name is not ASCII".into()));
             }
@@ -314,7 +327,7 @@ impl StacksMessageCodec for WrbpodSuperblock {
         }
         Ok(Self {
             version,
-            apps: app_state
+            apps: app_state,
         })
     }
 }

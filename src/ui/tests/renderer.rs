@@ -17,8 +17,8 @@
 
 use crate::core;
 use crate::ui::Renderer;
-use crate::vm::ClarityVM;
 use crate::vm::ClarityStorage;
+use crate::vm::ClarityVM;
 
 use crate::util::DEFAULT_CHAIN_ID;
 use crate::DEFAULT_WRB_EPOCH;
@@ -40,13 +40,14 @@ impl Renderer {
         let main_code_id = vm.get_code_id();
         let code_hash = Hash160::from_data(code.as_bytes());
         let mut wrb_tx = vm.begin_page_load(&code_hash).unwrap();
-        
+
         let mainnet = wrb_tx.mainnet();
 
         let mut db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
         db.begin();
-        let mut vm_env = OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
-        
+        let mut vm_env =
+            OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+
         let values_res = self.run_query_code(&mut vm_env, &main_code_id, code);
 
         let (mut db, _) = vm_env
@@ -157,8 +158,8 @@ fn test_render_viewports_raw_text() {
     let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_string(&mut vm, &bytes).unwrap();
-    println!("{}", &s); 
-    
+    println!("{}", &s);
+
     let mut vm = ClarityVM::new(db_path, "foo-test.btc").unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
@@ -173,7 +174,7 @@ fn test_render_viewports_wrapped_text() {
     if fs::metadata(&db_path).is_ok() {
         fs::remove_dir_all(&db_path).unwrap();
     }
-    
+
     let code = r#"
 (wrb-root u60 u80)
 (wrb-viewport u0 u5 u5 u25 u25)
@@ -199,13 +200,14 @@ fn test_render_viewports_wrapped_text() {
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_string(&mut vm, &bytes).unwrap();
     println!("====== output ======\n{}\n====== end output ======", &s);
-    
+
     let mut vm = ClarityVM::new(db_path, "foo-test.btc").unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
 
-    assert_eq!(s,
-"                                                                                
+    assert_eq!(
+        s,
+        "                                                                                
                                                                                 
                                                                                 
                                                                                 
@@ -264,7 +266,8 @@ fn test_render_viewports_wrapped_text() {
                                                                                 
                                                                                 
                                                                                 
-                                                                                ");
+                                                                                "
+    );
 }
 
 #[test]
@@ -275,7 +278,7 @@ fn test_render_viewport_buttons() {
     if fs::metadata(&db_path).is_ok() {
         fs::remove_dir_all(&db_path).unwrap();
     }
-    
+
     let code = r#"
 (wrb-root u6 u10)
 (wrb-viewport u0 u0 u0 u2 u10)
@@ -292,11 +295,14 @@ fn test_render_viewport_buttons() {
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_string(&mut vm, &bytes).unwrap();
     println!("{}", &s);
-    
+
     let mut vm = ClarityVM::new(db_path, "foo-test.btc").unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
-    assert_eq!(s, "[button 1]\n          \n     [butt\non 2]     \n         [\nbutton 3] ");
+    assert_eq!(
+        s,
+        "[button 1]\n          \n     [butt\non 2]     \n         [\nbutton 3] "
+    );
 }
 
 #[test]
@@ -307,7 +313,7 @@ fn test_render_viewport_checkbox() {
     if fs::metadata(&db_path).is_ok() {
         fs::remove_dir_all(&db_path).unwrap();
     }
-    
+
     let code = r#"
 (wrb-root u20 u20)
 (wrb-viewport u0 u10 u10 u5 u10)
@@ -331,7 +337,7 @@ fn test_render_viewport_checkbox() {
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_string(&mut vm, &bytes).unwrap();
     println!("{}", &s);
-    
+
     let mut vm = ClarityVM::new(db_path, "foo-test.btc").unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
@@ -339,4 +345,3 @@ fn test_render_viewport_checkbox() {
     println!("{:?}", &s);
     assert_eq!(s, "                    \n                    \n                    \n                    \n                    \n                    \n                    \n                    \n                    \n                    \n          [ ] option\n          [*] option\n          [ ] looooo\n          oooooooooo\n          oooooooong\n                    \n                    \n                    \n                    \n                    ");
 }
-

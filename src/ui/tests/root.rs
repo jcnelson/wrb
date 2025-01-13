@@ -15,16 +15,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::fs;
 use std::collections::HashMap;
+use std::fs;
 
 use crate::core;
 use crate::ui::charbuff::{CharBuff, CharCell, Color};
-use crate::ui::scanline::Scanline;
 use crate::ui::root::{Root, SceneGraph};
+use crate::ui::scanline::Scanline;
 use crate::ui::viewport::Viewport;
-use crate::Renderer;
 use crate::ClarityVM;
+use crate::Renderer;
 
 #[test]
 fn test_zbuff() {
@@ -36,7 +36,11 @@ fn test_zbuff() {
     green_viewport.print_to(11, 0, 0, 0x0000ff00.into(), 0x00ffffff.into(), "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg");
     blue_viewport.print_to(12, 0, 0, 0x000000ff.into(), 0x00ffffff.into(), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
 
-    let root = Root::new(60, 80, SceneGraph::new(vec![red_viewport, green_viewport, blue_viewport]));
+    let root = Root::new(
+        60,
+        80,
+        SceneGraph::new(vec![red_viewport, green_viewport, blue_viewport]),
+    );
     let zbuff = root.make_zbuff();
 
     let zbuff_txt = Root::dump_zbuff(&zbuff, 80);
@@ -44,7 +48,7 @@ fn test_zbuff() {
 
     assert_eq!(
         zbuff_txt,
-r#"********************************************************************************
+        r#"********************************************************************************
 ********************************************************************************
 ********************************************************************************
 ********************************************************************************
@@ -103,7 +107,8 @@ r#"*****************************************************************************
 ********************************************************************************
 ********************************************************************************
 ********************************************************************************
-********************************************************************************"#);
+********************************************************************************"#
+    );
 }
 
 #[test]
@@ -116,7 +121,11 @@ fn test_scenegraph_zbuff() {
     green_viewport.print_to(11, 0, 0, 0x0000ff00.into(), 0x00ffffff.into(), "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg");
     blue_viewport.print_to(12, 0, 0, 0x000000ff.into(), 0x00ffffff.into(), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
 
-    let root = Root::new(60, 80, SceneGraph::new(vec![red_viewport, green_viewport, blue_viewport]));
+    let root = Root::new(
+        60,
+        80,
+        SceneGraph::new(vec![red_viewport, green_viewport, blue_viewport]),
+    );
     let zbuff = root.make_zbuff();
 
     let zbuff_txt = Root::dump_zbuff(&zbuff, 80);
@@ -183,7 +192,8 @@ fn test_scenegraph_zbuff() {
 ********************************************************************************
 ********************************************************************************
 ********************************************************************************
-********************************************************************************"#);
+********************************************************************************"#
+    );
 }
 
 #[test]
@@ -196,8 +206,12 @@ fn render_root() {
     green_viewport.print_to(11, 0, 0, 0x0000ff00.into(), 0x00ffffff.into(), "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg");
     blue_viewport.print_to(12, 0, 0, 0x000000ff.into(), 0x00ffffff.into(), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
 
-    let mut root = Root::new(60, 80, SceneGraph::new(vec![red_viewport, green_viewport, blue_viewport]));
-    
+    let mut root = Root::new(
+        60,
+        80,
+        SceneGraph::new(vec![red_viewport, green_viewport, blue_viewport]),
+    );
+
     let buff = root.refresh();
     let scanlines = Scanline::compile(&buff);
     let mut output = "".to_string();
@@ -223,296 +237,162 @@ fn test_wordwrap() {
         output.push_str(&sl.into_term_code());
     }
     println!("{}", &output);
-    assert_eq!(scanlines,
-		vec![
-			Scanline::ClearLine,
-			Scanline::Text(
-				"                         ".into(),
-			),
-			Scanline::Newline,
+    assert_eq!(
+        scanlines,
+        vec![
+            Scanline::ClearLine,
+            Scanline::Text("                         ".into(),),
+            Scanline::Newline,
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"                         ".into(),
-			),
-			Scanline::Newline,
+            Scanline::ClearLine,
+            Scanline::Text("                         ".into(),),
+            Scanline::Newline,
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"                         ".into(),
-			),
-			Scanline::Newline,
+            Scanline::ClearLine,
+            Scanline::Text("                         ".into(),),
+            Scanline::Newline,
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"                         ".into(),
-			),
-			Scanline::Newline,
+            Scanline::ClearLine,
+            Scanline::Text("                         ".into(),),
+            Scanline::Newline,
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"                         ".into(),
-			),
-			Scanline::Newline,
+            Scanline::ClearLine,
+            Scanline::Text("                         ".into(),),
+            Scanline::Newline,
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"     ".into(),
-			),
-			Scanline::FgColor(
-				Color {
-					r: 255,
-					g: 255,
-					b: 255,
-				},
-			),
-			Scanline::BgColor(
-				Color {
-					r: 0,
-					g: 0,
-					b: 0,
-				},
-			),
-			Scanline::Text(
-				"no wrap".into(),
-			),
-			Scanline::ResetColor,
-			Scanline::Text(
-				"             ".into(),
-			),
-			Scanline::Newline,
+            Scanline::ClearLine,
+            Scanline::Text("     ".into(),),
+            Scanline::FgColor(Color {
+                r: 255,
+                g: 255,
+                b: 255,
+            },),
+            Scanline::BgColor(Color { r: 0, g: 0, b: 0 },),
+            Scanline::Text("no wrap".into(),),
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"     ".into(),
-			),
-			Scanline::FgColor(
-				Color {
-					r: 255,
-					g: 255,
-					b: 255,
-				},
-			),
-			Scanline::BgColor(
-				Color {
-					r: 0,
-					g: 0,
-					b: 0,
-				},
-			),
-			Scanline::Text(
-				"this is ".into(),
-			),
-			Scanline::ResetColor,
-			Scanline::Text(
-				"            ".into(),
-			),
-			Scanline::Newline,
+            Scanline::Text("             ".into(),),
+            Scanline::Newline,
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"     ".into(),
-			),
-			Scanline::FgColor(
-				Color {
-					r: 255,
-					g: 255,
-					b: 255,
-				},
-			),
-			Scanline::BgColor(
-				Color {
-					r: 0,
-					g: 0,
-					b: 0,
-				},
-			),
-			Scanline::Text(
-				"going to ".into(),
-			),
-			Scanline::ResetColor,
-			Scanline::Text(
-				"           ".into(),
-			),
-			Scanline::Newline,
+            Scanline::ClearLine,
+            Scanline::Text("     ".into(),),
+            Scanline::FgColor(Color {
+                r: 255,
+                g: 255,
+                b: 255,
+            },),
+            Scanline::BgColor(Color { r: 0, g: 0, b: 0 },),
+            Scanline::Text("this is ".into(),),
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"     ".into(),
-			),
-			Scanline::FgColor(
-				Color {
-					r: 255,
-					g: 255,
-					b: 255,
-				},
-			),
-			Scanline::BgColor(
-				Color {
-					r: 0,
-					g: 0,
-					b: 0,
-				},
-			),
-			Scanline::Text(
-				"wrap".into(),
-			),
-			Scanline::ResetColor,
-			Scanline::Text(
-				"                ".into(),
-			),
-			Scanline::Newline,
+            Scanline::Text("            ".into(),),
+            Scanline::Newline,
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"     ".into(),
-			),
-			Scanline::FgColor(
-				Color {
-					r: 255,
-					g: 255,
-					b: 255,
-				},
-			),
-			Scanline::BgColor(
-				Color {
-					r: 0,
-					g: 0,
-					b: 0,
-				},
-			),
-			Scanline::Text(
-				"biiiiiiiii".into(),
-			),
-			Scanline::ResetColor,
-			Scanline::Text(
-				"          ".into(),
-			),
-			Scanline::Newline,
+            Scanline::ClearLine,
+            Scanline::Text("     ".into(),),
+            Scanline::FgColor(Color {
+                r: 255,
+                g: 255,
+                b: 255,
+            },),
+            Scanline::BgColor(Color { r: 0, g: 0, b: 0 },),
+            Scanline::Text("going to ".into(),),
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"     ".into(),
-			),
-			Scanline::FgColor(
-				Color {
-					r: 255,
-					g: 255,
-					b: 255,
-				},
-			),
-			Scanline::BgColor(
-				Color {
-					r: 0,
-					g: 0,
-					b: 0,
-				},
-			),
-			Scanline::Text(
-				"ig word".into(),
-			),
-			Scanline::ResetColor,
-			Scanline::Text(
-				"             ".into(),
-			),
-			Scanline::Newline,
+            Scanline::Text("           ".into(),),
+            Scanline::Newline,
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"     ".into(),
-			),
-			Scanline::FgColor(
-				Color {
-					r: 255,
-					g: 255,
-					b: 255,
-				},
-			),
-			Scanline::BgColor(
-				Color {
-					r: 0,
-					g: 0,
-					b: 0,
-				},
-			),
-			Scanline::Text(
-				"wrap   ".into(),
-			),
-			Scanline::ResetColor,
-			Scanline::Text(
-				"             ".into(),
-			),
-			Scanline::Newline,
+            Scanline::ClearLine,
+            Scanline::Text("     ".into(),),
+            Scanline::FgColor(Color {
+                r: 255,
+                g: 255,
+                b: 255,
+            },),
+            Scanline::BgColor(Color { r: 0, g: 0, b: 0 },),
+            Scanline::Text("wrap".into(),),
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"     ".into(),
-			),
-			Scanline::FgColor(
-				Color {
-					r: 255,
-					g: 255,
-					b: 255,
-				},
-			),
-			Scanline::BgColor(
-				Color {
-					r: 0,
-					g: 0,
-					b: 0,
-				},
-			),
-			Scanline::Text(
-				"space".into(),
-			),
-			Scanline::ResetColor,
-			Scanline::Text(
-				"               ".into(),
-			),
-			Scanline::Newline,
+            Scanline::Text("                ".into(),),
+            Scanline::Newline,
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"                         ".into(),
-			),
-			Scanline::Newline,
+            Scanline::ClearLine,
+            Scanline::Text("     ".into(),),
+            Scanline::FgColor(Color {
+                r: 255,
+                g: 255,
+                b: 255,
+            },),
+            Scanline::BgColor(Color { r: 0, g: 0, b: 0 },),
+            Scanline::Text("biiiiiiiii".into(),),
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"                         ".into(),
-			),
-			Scanline::Newline,
+            Scanline::Text("          ".into(),),
+            Scanline::Newline,
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"                         ".into(),
-			),
-			Scanline::Newline,
+            Scanline::ClearLine,
+            Scanline::Text("     ".into(),),
+            Scanline::FgColor(Color {
+                r: 255,
+                g: 255,
+                b: 255,
+            },),
+            Scanline::BgColor(Color { r: 0, g: 0, b: 0 },),
+            Scanline::Text("ig word".into(),),
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"                         ".into(),
-			),
-			Scanline::Newline,
+            Scanline::Text("             ".into(),),
+            Scanline::Newline,
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"                         ".into(),
-			),
-			Scanline::Newline,
+            Scanline::ClearLine,
+            Scanline::Text("     ".into(),),
+            Scanline::FgColor(Color {
+                r: 255,
+                g: 255,
+                b: 255,
+            },),
+            Scanline::BgColor(Color { r: 0, g: 0, b: 0 },),
+            Scanline::Text("wrap   ".into(),),
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"                         ".into(),
-			),
-			Scanline::Newline,
+            Scanline::Text("             ".into(),),
+            Scanline::Newline,
             Scanline::ResetColor,
-			Scanline::ClearLine,
-			Scanline::Text(
-				"                         ".into(),
-			),
-			Scanline::ResetColor,
-		]); 
+            Scanline::ClearLine,
+            Scanline::Text("     ".into(),),
+            Scanline::FgColor(Color {
+                r: 255,
+                g: 255,
+                b: 255,
+            },),
+            Scanline::BgColor(Color { r: 0, g: 0, b: 0 },),
+            Scanline::Text("space".into(),),
+            Scanline::ResetColor,
+            Scanline::Text("               ".into(),),
+            Scanline::Newline,
+            Scanline::ResetColor,
+            Scanline::ClearLine,
+            Scanline::Text("                         ".into(),),
+            Scanline::Newline,
+            Scanline::ResetColor,
+            Scanline::ClearLine,
+            Scanline::Text("                         ".into(),),
+            Scanline::Newline,
+            Scanline::ResetColor,
+            Scanline::ClearLine,
+            Scanline::Text("                         ".into(),),
+            Scanline::Newline,
+            Scanline::ResetColor,
+            Scanline::ClearLine,
+            Scanline::Text("                         ".into(),),
+            Scanline::Newline,
+            Scanline::ResetColor,
+            Scanline::ClearLine,
+            Scanline::Text("                         ".into(),),
+            Scanline::Newline,
+            Scanline::ResetColor,
+            Scanline::ClearLine,
+            Scanline::Text("                         ".into(),),
+            Scanline::Newline,
+            Scanline::ResetColor,
+            Scanline::ClearLine,
+            Scanline::Text("                         ".into(),),
+            Scanline::ResetColor,
+        ]
+    );
 }
 
 #[test]
@@ -523,7 +403,7 @@ fn test_root_focus_order() {
     if fs::metadata(&db_path).is_ok() {
         fs::remove_dir_all(&db_path).unwrap();
     }
-    
+
     let code = r#"
 (wrb-root u40 u40)
 (wrb-viewport u0 u0 u0 u10 u20)
@@ -558,7 +438,8 @@ fn test_root_focus_order() {
         (print WRB_BUTTON_6)
         (print WRB_BUTTON_7))"#;
 
-    let button_ids : Vec<_> = renderer.run_test_query_code(&mut vm, qry)
+    let button_ids: Vec<_> = renderer
+        .run_test_query_code(&mut vm, qry)
         .unwrap()
         .into_iter()
         .map(|val| val.expect_result_ok().unwrap().expect_u128().unwrap())
@@ -585,4 +466,3 @@ fn test_root_focus_order() {
         assert!(root.forms.get(element_id).is_some());
     }
 }
-

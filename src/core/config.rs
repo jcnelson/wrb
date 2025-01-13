@@ -15,13 +15,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use clarity::vm::types::QualifiedContractIdentifier;
+use stacks_common::util::secp256k1::Secp256k1PrivateKey;
 use std::fs;
 use std::path::{Path, PathBuf};
-use stacks_common::util::secp256k1::Secp256k1PrivateKey;
-use clarity::vm::types::QualifiedContractIdentifier;
 
-use serde::Serialize;
 use serde::Deserialize;
+use serde::Serialize;
 use toml;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,7 +59,7 @@ impl Config {
             private_key: Secp256k1PrivateKey::new(),
             storage: "./db".into(),
             debug_path: "./debug.log".into(),
-            __path: "".into()
+            __path: "".into(),
         }
     }
 
@@ -71,11 +71,10 @@ impl Config {
     }
 
     pub fn from_str(content: &str) -> Result<Config, String> {
-        let config: Config =
-            toml::from_str(content).map_err(|e| format!("Invalid toml: {}", e))?;
+        let config: Config = toml::from_str(content).map_err(|e| format!("Invalid toml: {}", e))?;
         Ok(config)
     }
-        
+
     pub fn mainnet(&self) -> bool {
         self.mainnet
     }
@@ -91,8 +90,7 @@ impl Config {
     pub fn get_bns_contract_id(&self) -> QualifiedContractIdentifier {
         if self.mainnet {
             QualifiedContractIdentifier::parse("SP000000000000000000002Q6VF78.bns").unwrap()
-        }
-        else {
+        } else {
             QualifiedContractIdentifier::parse("ST000000000000000000002AMW42H.bns").unwrap()
         }
     }
@@ -101,29 +99,25 @@ impl Config {
         if let Some('/') = self.storage.chars().next() {
             // absolute path
             self.storage.clone()
-        }
-        else {
+        } else {
             // relative path
             if let Some(dirname) = Path::new(&self.__path).parent() {
                 format!("{}/{}", dirname.display(), &self.storage)
-            }
-            else {
+            } else {
                 self.storage.clone()
             }
         }
     }
-    
+
     pub fn debug_path(&self) -> String {
         if let Some('/') = self.debug_path.chars().next() {
             // absolute path
             self.debug_path.clone()
-        }
-        else {
+        } else {
             // relative path
             if let Some(dirname) = Path::new(&self.__path).parent() {
                 format!("{}/{}", dirname.display(), &self.debug_path)
-            }
-            else {
+            } else {
                 self.debug_path.clone()
             }
         }

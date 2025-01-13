@@ -23,14 +23,14 @@ use std::fmt;
 use std::io;
 use std::io::{Read, Write};
 
-use crate::vm::storage::Error as DBError;
 use crate::vm;
+use crate::vm::storage::Error as DBError;
 
-use clarity::vm::Value;
-use clarity::vm::types::SequenceData;
-use clarity::vm::types::CharType;
-use clarity::vm::types::UTF8Data;
 use clarity::vm::errors::InterpreterError;
+use clarity::vm::types::CharType;
+use clarity::vm::types::SequenceData;
+use clarity::vm::types::UTF8Data;
+use clarity::vm::Value;
 
 use lzma_rs;
 
@@ -69,7 +69,7 @@ pub enum Error {
     /// WRB application page error
     Page(String),
     /// Event error
-    Event(String)
+    Event(String),
 }
 
 impl fmt::Display for Error {
@@ -144,7 +144,7 @@ impl ValueExtensions for Value {
             let mut s = String::new();
             // each item in data is a code point
             for val_bytes in data.into_iter() {
-                let val_4_bytes : [u8; 4] = match val_bytes.len() {
+                let val_4_bytes: [u8; 4] = match val_bytes.len() {
                     0 => [0, 0, 0, 0],
                     1 => [0, 0, 0, val_bytes[0]],
                     2 => [0, 0, val_bytes[0], val_bytes[1]],
@@ -162,7 +162,10 @@ impl ValueExtensions for Value {
             }
             Ok(s)
         } else {
-            Err(clarity_error::Interpreter(InterpreterError::Expect("expected utf8 string".into())).into())
+            Err(
+                clarity_error::Interpreter(InterpreterError::Expect("expected utf8 string".into()))
+                    .into(),
+            )
         }
     }
 }
