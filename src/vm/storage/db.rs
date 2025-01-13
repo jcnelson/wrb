@@ -37,6 +37,7 @@ use clarity::vm::errors::{Error as ClarityError, RuntimeErrorType};
 use clarity::vm::types::QualifiedContractIdentifier;
 use stacks_common::types::chainstate::BlockHeaderHash;
 use stacks_common::types::chainstate::StacksBlockId;
+use stacks_common::types::chainstate::TrieHash;
 use stacks_common::util::hash::Sha512Trunc256Sum;
 
 use crate::util::sqlite::{
@@ -577,6 +578,17 @@ impl<'a> ClarityBackingStore for ReadOnlyWrbStore<'a> {
         unimplemented!()
     }
 
+    fn get_data_from_path(&mut self, _path: &TrieHash) -> Result<Option<String>, clarity_error> {
+        unimplemented!()
+    }
+
+    fn get_data_with_proof_from_path(
+        &mut self,
+        _path: &TrieHash,
+    ) -> Result<Option<(String, Vec<u8>)>, clarity_error> {
+        unimplemented!()
+    }
+
     fn put_all_data(&mut self, _items: Vec<(String, String)>) -> Result<(), clarity_error> {
         wrb_error!("Attempted to commit changes to read-only K/V");
         panic!("BUG: attempted commit to read-only K/V");
@@ -722,6 +734,17 @@ impl<'a> ClarityBackingStore for WritableWrbStore<'a> {
     fn get_data_with_proof(
         &mut self,
         _key: &str,
+    ) -> Result<Option<(String, Vec<u8>)>, clarity_error> {
+        unimplemented!()
+    }
+
+    fn get_data_from_path(&mut self, _path: &TrieHash) -> Result<Option<String>, clarity_error> {
+        unimplemented!()
+    }
+
+    fn get_data_with_proof_from_path(
+        &mut self,
+        _path: &TrieHash,
     ) -> Result<Option<(String, Vec<u8>)>, clarity_error> {
         unimplemented!()
     }
