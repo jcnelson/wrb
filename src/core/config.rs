@@ -28,8 +28,6 @@ use toml;
 pub struct Config {
     /// mainnet or testnet
     mainnet: bool,
-    /// maximum attachment size
-    max_attachment_size: usize,
     /// node host
     node_host: String,
     /// node port
@@ -46,14 +44,10 @@ pub struct Config {
     __path: String,
 }
 
-// maximum size of a compressed attachment is 1MB
-pub const MAX_ATTACHMENT_SIZE: usize = 1024 * 1024;
-
 impl Config {
     pub fn default(mainnet: bool, node_host: &str, node_port: u16) -> Config {
         Config {
             mainnet,
-            max_attachment_size: MAX_ATTACHMENT_SIZE,
             node_host: node_host.into(),
             node_port,
             private_key: Secp256k1PrivateKey::new(),

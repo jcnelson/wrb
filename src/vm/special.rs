@@ -22,16 +22,12 @@ use std::str;
 
 use crate::runner::Runner;
 
-use crate::storage::StackerDBClient;
 use crate::storage::Wrbpod;
 
 use crate::core::with_global_config;
 use crate::core::with_globals;
 
 use crate::util::privkey_to_principal;
-
-#[cfg(test)]
-use crate::storage::tests::MockStackerDBClient;
 
 use crate::storage::Error as WrbpodError;
 
@@ -84,60 +80,6 @@ where
     };
     let _ = global_context.commit()?;
     result
-}
-
-#[cfg(test)]
-pub fn get_home_stackerdb_client(
-    _runner: &mut Runner,
-    _contract: QualifiedContractIdentifier,
-    privkey: StacksPrivateKey,
-) -> Result<Box<dyn StackerDBClient>, Error> {
-    Ok(Box::new(MockStackerDBClient::new(privkey, 16)))
-}
-
-#[cfg(test)]
-pub fn get_replica_stackerdb_client(
-    _runner: &mut Runner,
-    _contract: QualifiedContractIdentifier,
-    privkey: StacksPrivateKey,
-) -> Result<Box<dyn StackerDBClient>, Error> {
-    Ok(Box::new(MockStackerDBClient::new(privkey, 16)))
-}
-
-#[cfg(not(test))]
-pub fn get_home_stackerdb_client(
-    runner: &mut Runner,
-    contract: QualifiedContractIdentifier,
-    _ignored: StacksPrivateKey,
-) -> Result<Box<dyn StackerDBClient>, Error> {
-    let node_addr = runner
-        .resolve_node()
-        .map_err(|e| {
-            Error::Interpreter(
-                InterpreterError::InterpreterError(format!("Unable to resolve node: {:?}", &e))
-                    .into(),
-            )
-        })?
-        .ok_or(InterpreterError::InterpreterError(
-            "Unable to resolve node".to_string(),
-        ))?;
-
-    Ok(Box::new(StackerDBSession::new(node_addr, contract)))
-}
-
-#[cfg(not(test))]
-pub fn get_replica_stackerdb_client(
-    runner: &mut Runner,
-    contract: QualifiedContractIdentifier,
-    _ignored: StacksPrivateKey,
-) -> Result<Box<dyn StackerDBClient>, Error> {
-    let node_addr = runner.find_stackerdb(&contract).map_err(|e| {
-        Error::Interpreter(
-            InterpreterError::InterpreterError(format!("Unable to resolve node: {:?}", &e)).into(),
-        )
-    })?;
-
-    Ok(Box::new(StackerDBSession::new(node_addr, contract)))
 }
 
 /// Make an (err (string-ascii 512))
@@ -327,10 +269,30 @@ pub fn handle_wrbpod_open(
     let owned = key_principal == wrbpod_contract_id.issuer;
 
     // go set up the wrbpod session
-    let home_stackerdb_client =
-        get_home_stackerdb_client(&mut runner, wrbpod_contract_id.clone(), privkey.clone())?;
-    let replica_stackerdb_client =
-        get_replica_stackerdb_client(&mut runner, wrbpod_contract_id.clone(), privkey.clone())?;
+    let home_stackerdb_client = runner
+        .get_home_stackerdb_client(wrbpod_contract_id.clone(), privkey.clone())
+        .map_err(|e| {
+            Error::Interpreter(
+                InterpreterError::InterpreterError(format!(
+                    "Unable to connect to home node: {:?}",
+                    &e
+                ))
+                .into(),
+            )
+        })?;
+
+    let replica_stackerdb_client = runner
+        .get_replica_stackerdb_client(wrbpod_contract_id.clone(), privkey.clone())
+        .map_err(|e| {
+            Error::Interpreter(
+                InterpreterError::InterpreterError(format!(
+                    "Unable to connect to replica node: {:?}",
+                    &e
+                ))
+                .into(),
+            )
+        })?;
+
     let wrbpod_session_result = Wrbpod::open(
         home_stackerdb_client,
         replica_stackerdb_client,

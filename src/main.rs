@@ -17,6 +17,7 @@ extern crate lazy_static;
 
 extern crate libstackerdb;
 
+extern crate base64ct;
 extern crate dirs;
 extern crate lzma_rs;
 extern crate rusqlite;
@@ -40,6 +41,8 @@ use std::process;
 use std::thread;
 
 use crate::core::Config;
+use crate::runner::bns::BNSResolver;
+use crate::runner::bns::NodeBNSResolver;
 use crate::runner::Runner;
 use crate::ui::events::WrbChannels;
 use crate::ui::events::WrbEvent;
@@ -64,8 +67,6 @@ use clarity::vm::types::QualifiedContractIdentifier;
 use clarity::vm::types::TupleData;
 use clarity::vm::ClarityName;
 use clarity::vm::Value;
-
-use crate::vm::special::{get_home_stackerdb_client, get_replica_stackerdb_client};
 
 use stacks_common::address::{
     C32_ADDRESS_VERSION_MAINNET_SINGLESIG, C32_ADDRESS_VERSION_TESTNET_SINGLESIG,
@@ -124,34 +125,36 @@ fn usage(msg: &str) {
     process::exit(1);
 }
 
+/// Resolve a name to its wrbsite
+fn wrbsite_load(wrbsite_name: &str) -> Result<Vec<u8>, String> {
+    let mut wrbsite_split = wrbsite_name.split(".");
+    let Some(name) = wrbsite_split.next() else {
+        return Err("Malformed wrbsite name -- no '.'".to_string());
+    };
+    let Some(namespace) = wrbsite_split.next() else {
+        return Err("Malformed wrbsite name -- no namespace".to_string());
+    };
+
+    let (node_host, node_port) =
+        with_global_config(|cfg| cfg.get_node_addr()).expect("FATAL: system not initialized");
+    let bns_contract_id =
+        with_global_config(|cfg| cfg.get_bns_contract_id()).expect("FATAL: system not initialized");
+    let mut runner = Runner::new(bns_contract_id, node_host, node_port);
+    let mut resolver = NodeBNSResolver::new();
+
+    let wrbsite_bytes = runner
+        .wrbsite_load(&mut resolver, &name, &namespace)
+        .map_err(|e| format!("Failed to load '{}': {:?}", wrbsite_name, &e))?
+        .ok_or_else(|| format!("No wrbsite found for '{}'", wrbsite_name))?;
+
+    Ok(wrbsite_bytes)
+}
+
 /// Load the wrbsite for the given name from the given source
 fn load_wrbsite_source(wrbsite_name: &str, source: Option<String>) -> Result<Vec<u8>, String> {
     let Some(path) = source else {
-        let mut wrbsite_split = wrbsite_name.split(".");
-        let Some(name) = wrbsite_split.next() else {
-            return Err("Malformed wrbsite name -- no '.'".to_string());
-        };
-        let Some(namespace) = wrbsite_split.next() else {
-            return Err("Malformed wrbsite name -- no namespace".to_string());
-        };
-
-        let (node_host, node_port) =
-            with_global_config(|cfg| cfg.get_node_addr()).expect("FATAL: system not initialized");
-        let bns_contract_id = with_global_config(|cfg| cfg.get_bns_contract_id())
-            .expect("FATAL: system not initialized");
-        let mut runner = Runner::new(bns_contract_id, node_host, node_port);
-        let bns_res = runner
-            .bns_lookup(namespace, name)
-            .map_err(|e| format!("Failed to look up '{}': {:?}", wrbsite_name, &e))?;
-
-        let bns_rec = bns_res
-            .map_err(|e| format!("BNS error when looking up '{}': {:?}", wrbsite_name, &e))?;
-
-        let Some(zonefile) = bns_rec.zonefile else {
-            return Err(format!("Name '{}' has no zonefile data", &wrbsite_name));
-        };
-
-        return Ok(zonefile);
+        return wrbsite_load(wrbsite_name)
+            .map_err(|e| format!("Failed to load '{}': {:?}", wrbsite_name, &e));
     };
 
     // treat source as a path to uncompressed clarity code
@@ -286,25 +289,23 @@ fn format_wrbpod_session(
     let bns_contract_id =
         with_global_config(|cfg| cfg.get_bns_contract_id()).expect("FATAL: system not initialized");
     let mut runner = Runner::new(bns_contract_id, node_host, node_port);
-    let home_stackerdb_client =
-        get_home_stackerdb_client(&mut runner, contract_addr.clone(), privkey.clone()).map_err(
-            |e| {
-                format!(
-                    "Failed to instantiate StackerDB client to {}: {:?}",
-                    contract_addr, &e
-                )
-            },
-        )?;
+    let home_stackerdb_client = runner
+        .get_home_stackerdb_client(contract_addr.clone(), privkey.clone())
+        .map_err(|e| {
+            format!(
+                "Failed to instantiate StackerDB client to {}: {:?}",
+                contract_addr, &e
+            )
+        })?;
 
-    let replica_stackerdb_client =
-        get_replica_stackerdb_client(&mut runner, contract_addr.clone(), privkey.clone()).map_err(
-            |e| {
-                format!(
-                    "Failed to instantiate StackerDB client to {}: {:?}",
-                    contract_addr, &e
-                )
-            },
-        )?;
+    let replica_stackerdb_client = runner
+        .get_replica_stackerdb_client(contract_addr.clone(), privkey.clone())
+        .map_err(|e| {
+            format!(
+                "Failed to instantiate StackerDB client to {}: {:?}",
+                contract_addr, &e
+            )
+        })?;
 
     let wrbpod_session = Wrbpod::format(
         home_stackerdb_client,
@@ -345,25 +346,23 @@ fn setup_wrbpod_session(
     let bns_contract_id =
         with_global_config(|cfg| cfg.get_bns_contract_id()).expect("FATAL: system not initialized");
     let mut runner = Runner::new(bns_contract_id, node_host, node_port);
-    let home_stackerdb_client =
-        get_home_stackerdb_client(&mut runner, contract_addr.clone(), privkey.clone()).map_err(
-            |e| {
-                format!(
-                    "Failed to instantiate StackerDB client to {}: {:?}",
-                    contract_addr, &e
-                )
-            },
-        )?;
+    let home_stackerdb_client = runner
+        .get_home_stackerdb_client(contract_addr.clone(), privkey.clone())
+        .map_err(|e| {
+            format!(
+                "Failed to instantiate StackerDB client to {}: {:?}",
+                contract_addr, &e
+            )
+        })?;
 
-    let replica_stackerdb_client =
-        get_replica_stackerdb_client(&mut runner, contract_addr.clone(), privkey.clone()).map_err(
-            |e| {
-                format!(
-                    "Failed to instantiate StackerDB client to {}: {:?}",
-                    contract_addr, &e
-                )
-            },
-        )?;
+    let replica_stackerdb_client = runner
+        .get_replica_stackerdb_client(contract_addr.clone(), privkey.clone())
+        .map_err(|e| {
+            format!(
+                "Failed to instantiate StackerDB client to {}: {:?}",
+                contract_addr, &e
+            )
+        })?;
 
     let wrbpod_session = Wrbpod::open(
         home_stackerdb_client,
@@ -996,6 +995,84 @@ fn subcommand_wrbpod(mut argv: Vec<String>, wrbsite_data_source_opt: Option<Stri
     process::exit(1);
 }
 
+/// bns subcommand helper
+/// Commands start at argv[2]
+fn subcommand_bns(mut argv: Vec<String>) {
+    if argv.len() < 3 {
+        eprintln!("Usage: {} bns [subcommand] [options]", &argv[0]);
+        process::exit(1);
+    }
+    let cmd = argv[2].clone();
+    if cmd == "resolve" {
+        if argv.len() < 4 {
+            eprintln!("Usage: {} bns {} [-r] NAME", &argv[0], &cmd);
+            process::exit(1);
+        }
+        let raw = consume_arg(&mut argv, &["-r", "--raw"], false)
+            .map_err(|e| {
+                usage(&e);
+                unreachable!()
+            })
+            .unwrap();
+
+        let wrbsite_name = argv[3].clone();
+        let mut wrbsite_split = wrbsite_name.split(".");
+        let Some(name) = wrbsite_split.next() else {
+            eprintln!("Malformed wrbsite name -- no '.'");
+            process::exit(1);
+        };
+        let Some(namespace) = wrbsite_split.next() else {
+            eprintln!("Malformed wrbsite name -- no namespace");
+            process::exit(1);
+        };
+
+        let (node_host, node_port) =
+            with_global_config(|cfg| cfg.get_node_addr()).expect("FATAL: system not initialized");
+        let bns_contract_id = with_global_config(|cfg| cfg.get_bns_contract_id())
+            .expect("FATAL: system not initialized");
+        let mut runner = Runner::new(bns_contract_id, node_host, node_port);
+
+        let mut bns_resolver = NodeBNSResolver::new();
+        let zonefile = bns_resolver
+            .lookup(&mut runner, &name, &namespace)
+            .map_err(|e| {
+                eprintln!(
+                    "FATAL: failed to resolve '{}': system error: {:?}",
+                    &wrbsite_name, &e
+                );
+                process::exit(1);
+            })
+            .unwrap()
+            .map_err(|bns_e| {
+                eprintln!(
+                    "FATAL: failed to resolve '{}': BNS error: {:?}",
+                    &wrbsite_name, &bns_e
+                );
+                process::exit(1);
+            })
+            .unwrap()
+            .zonefile
+            .or_else(|| {
+                eprintln!("FATAL: BNS name '{}' has no zonefile", &wrbsite_name);
+                process::exit(1);
+            })
+            .unwrap();
+
+        if raw.is_some() {
+            let zonefile_hex = to_hex(&zonefile);
+            println!("{}", &zonefile_hex);
+            return;
+        }
+
+        let zonefile_str = String::from_utf8_lossy(&zonefile);
+        println!("{}", &zonefile_str);
+        return;
+    }
+
+    eprintln!("Unrecognized `bns` command '{}'", &cmd);
+    process::exit(1);
+}
+
 fn main() {
     let mut argv: Vec<String> = env::args().collect();
 
@@ -1090,6 +1167,10 @@ fn main() {
     } else if cmd == "wrbpod" {
         // wrbpod tooling mode
         subcommand_wrbpod(argv, wrbsite_data_source_opt);
+        process::exit(0);
+    } else if cmd == "bns" {
+        // bns tooling mode
+        subcommand_bns(argv);
         process::exit(0);
     }
 

@@ -66,12 +66,12 @@ impl TryFrom<ResponseData> for BNSNameRecord {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BNSError {
+    NoZonefileFound,
     NameNotFound,
     NamespaceNotFound,
-    NameGracePeriod,
-    NameExpired,
+    NameRevoked,
 }
 
 impl TryFrom<ResponseData> for BNSError {
@@ -81,12 +81,40 @@ impl TryFrom<ResponseData> for BNSError {
             return Err(Error::Deserialize("Expected uint".into()));
         };
         match errcode {
-            2013 => Ok(Self::NameNotFound),
-            1005 => Ok(Self::NamespaceNotFound),
-            2009 => Ok(Self::NameGracePeriod),
-            2008 => Ok(Self::NameExpired),
-            _ => Err(Error::Deserialize("Unrecognized error code".into())),
+            101 => Ok(Self::NoZonefileFound),
+            102 => Ok(Self::NameNotFound),
+            103 => Ok(Self::NamespaceNotFound),
+            104 => Ok(Self::NameRevoked),
+            x => Err(Error::Deserialize(format!("Unrecognized error code {}", x))),
         }
+    }
+}
+
+pub trait BNSResolver {
+    fn lookup(
+        &mut self,
+        runner: &mut Runner,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Result<BNSNameRecord, BNSError>, Error>;
+}
+
+pub struct NodeBNSResolver {}
+
+impl NodeBNSResolver {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl BNSResolver for NodeBNSResolver {
+    fn lookup(
+        &mut self,
+        runner: &mut Runner,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Result<BNSNameRecord, BNSError>, Error> {
+        runner.bns_lookup(namespace, name)
     }
 }
 
@@ -101,10 +129,10 @@ impl Runner {
         let bns_contract = self.bns_contract_id.clone();
         let v = self.call_readonly(
             &bns_contract,
-            "name-resolve",
+            "resolve-name",
             &[
-                Value::string_ascii_from_bytes(namespace.as_bytes().to_vec())?,
-                Value::string_ascii_from_bytes(name.as_bytes().to_vec())?,
+                Value::buff_from(name.as_bytes().to_vec())?,
+                Value::buff_from(namespace.as_bytes().to_vec())?,
             ],
         )?;
         let Value::Response(v_res) = v else {

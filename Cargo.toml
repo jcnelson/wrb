@@ -16,6 +16,7 @@ serde_derive = "1"
 lazy_static = "1.4"
 termion = "3.0.0"
 toml = "0.8.12"
+base64ct = { version = "1.6.0", features = ["alloc"] }
 
 [patch.crates-io]
 stacker = { git = "https://github.com/jcnelson/stacker"}
