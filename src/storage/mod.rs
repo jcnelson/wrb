@@ -136,6 +136,7 @@ pub struct WrbpodSuperblock {
 
 /// StackerDB client trait (so we can mock it in testing)
 pub trait StackerDBClient: Send {
+    fn get_host(&self) -> SocketAddr;
     fn list_chunks(&mut self) -> Result<Vec<SlotMetadata>, RuntimeError>;
     fn get_chunks(
         &mut self,

@@ -140,15 +140,13 @@ pub fn decode_http_response(payload: &[u8]) -> Result<(HashMap<String, String>, 
     // consume respuest
     let (headers, body_offset) =
         if let Ok(httparse::Status::Complete(body_offset)) = resp.parse(payload) {
-            if let Some(code) = resp.code {
-                if code != 200 {
-                    return Err(Error::HttpError(code.into()));
-                }
+            let code = if let Some(code) = resp.code {
+                code
             } else {
                 return Err(Error::MalformedResponse(
                     "No HTTP status code returned".to_string(),
                 ));
-            }
+            };
             if let Some(version) = resp.version {
                 if version != 0 && version != 1 {
                     return Err(Error::MalformedResponse(format!(
@@ -185,6 +183,9 @@ pub fn decode_http_response(payload: &[u8]) -> Result<(HashMap<String, String>, 
                     )));
                 }
                 headers.insert(key, value);
+            }
+            if code != 200 {
+                return Err(Error::HttpError(code.into(), headers, body_offset));
             }
             (headers, body_offset)
         } else {
@@ -255,12 +256,33 @@ pub fn run_http_request<S: Read + Write>(
 
     sock.read_to_end(&mut buf)?;
 
-    let (headers, body_offset) = decode_http_response(&buf)?;
+    let (code, headers, body_offset) = match decode_http_response(&buf) {
+        Ok((headers, body_offset)) => (200, headers, body_offset),
+        Err(Error::HttpError(code, headers, body_offset)) => (code, headers, body_offset),
+        Err(e) => {
+            return Err(e);
+        }
+    };
+
     if body_offset >= buf.len() {
         // no body
         wrb_debug!("No HTTP body");
-        return Ok(vec![]);
+        if code == 200 {
+            return Ok(vec![]);
+        } else {
+            return Err(Error::HttpError(code, headers, body_offset));
+        }
     }
 
-    decode_http_body(&headers, &buf[body_offset..]).map_err(|e| e.into())
+    let body = decode_http_body(&headers, &buf[body_offset..])?;
+    if code == 200 {
+        return Ok(body);
+    } else {
+        wrb_debug!(
+            "HTTP Error\nHTTP code: {}\nHTTP body: {}\n",
+            code,
+            &String::from_utf8_lossy(&body)
+        );
+        return Err(Error::HttpError(code, headers, body_offset));
+    }
 }

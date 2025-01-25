@@ -265,7 +265,7 @@ pub fn handle_wrbpod_open(
         InterpreterError::InterpreterError(format!("System is not initialized")),
     )?;
 
-    let key_principal = privkey_to_principal(&privkey, wrbpod_contract_id.issuer.0);
+    let key_principal = privkey_to_principal(&privkey, wrbpod_contract_id.issuer.version());
     let owned = key_principal == wrbpod_contract_id.issuer;
 
     // go set up the wrbpod session

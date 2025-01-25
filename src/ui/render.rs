@@ -67,7 +67,7 @@ use crate::ui::forms::WrbForm;
 use crate::ui::forms::{Button, Checkbox, PrintText, RawText, TextArea, TextLine, WrbFormTypes};
 
 pub struct Renderer {
-    /// maximum attachment size -- a decoded string can't be longer than this
+    /// maximum wrbsite size -- a decoded string can't be longer than this
     max_attachment_size: u64,
 }
 
@@ -94,15 +94,24 @@ impl Renderer {
         Ok(out)
     }
 
-    /// Decode an attachment into bytes (written to `output`).
+    /// Decode a wrbsite into bytes (written to `output`).
     /// Input must be an LZMA-compressed stream.
     /// TODO: need a bufread bound reader
-    pub fn decode<R, W>(&self, input: &mut R, output: &mut W) -> Result<(), Error>
+    pub fn decode<R, W>(input: &mut R, output: &mut W) -> Result<(), Error>
     where
         R: BufRead,
         W: Write,
     {
         lzma_rs::lzma_decompress(input, output).map_err(|e| e.into())
+    }
+
+    /// Decode a wrbsite into bytes
+    /// Input must be an LZMA-compressed stream.
+    /// TODO: need a bufread bound reader
+    pub fn decode_bytes(input: &[u8]) -> Result<Vec<u8>, Error> {
+        let mut output = vec![];
+        Renderer::decode(&mut &input[..], &mut output)?;
+        Ok(output)
     }
 
     /// Instantiate the main code.
@@ -545,7 +554,7 @@ impl Renderer {
         compressed_input: &mut R,
     ) -> Result<String, Error> {
         let mut decompressed_code = vec![];
-        self.decode(compressed_input, &mut decompressed_code)?;
+        Self::decode(compressed_input, &mut decompressed_code)?;
         let input = std::str::from_utf8(&decompressed_code)
             .map_err(|_| Error::Codec("Compressed bytes did not decode to a utf8 string".into()))?;
         if !input.is_ascii() {
@@ -554,7 +563,7 @@ impl Renderer {
         Ok(input.to_string())
     }
 
-    /// Decode the decompressed attachment into Clarity code, run it, and evaluate it into a root
+    /// Decode the decompressed bytes into Clarity code, run it, and evaluate it into a root
     /// pane.  Does one pass of the event loop and returns the single Root
     pub fn eval_root(&self, vm: &mut ClarityVM, compressed_input: &[u8]) -> Result<Root, Error> {
         let (render_channels, ui_channels) = WrbChannels::new();

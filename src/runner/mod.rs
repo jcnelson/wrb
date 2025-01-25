@@ -15,6 +15,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::error;
 use std::fmt;
@@ -45,6 +46,7 @@ pub mod http;
 pub mod process;
 pub mod site;
 pub mod stackerdb;
+pub mod tx;
 
 #[cfg(test)]
 pub mod tests;
@@ -92,7 +94,7 @@ pub struct RPCPeerInfoData {
 
 #[derive(Debug, Clone)]
 pub enum Error {
-    FailedToRun(String),
+    FailedToRun(String, Vec<String>),
     FailedToExecute(String, String),
     KilledBySignal(String),
     BadExit(i32),
@@ -102,17 +104,21 @@ pub enum Error {
     Deserialize(String),
     NotConnected,
     NotInitialized,
+    NoFeeEstimate,
     MalformedRequest(String),
     MalformedResponse(String),
-    HttpError(u32),
+    HttpError(u32, HashMap<String, String>, usize),
     RPCError(String),
+    Storage(String),
     Clarity(String),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Error::FailedToRun(ref cmd) => write!(f, "Failed to run '{}'", cmd),
+            Error::FailedToRun(ref cmd, ref reasons) => {
+                write!(f, "Failed to run '{}'. Reasons: {:?}", cmd, reasons)
+            }
             Error::FailedToExecute(ref cmd, ref ioe) => {
                 write!(f, "Failed to run '{}': {}", cmd, ioe)
             }
@@ -126,10 +132,14 @@ impl fmt::Display for Error {
             Error::Deserialize(ref s) => write!(f, "Deserialize error: {}", s),
             Error::NotConnected => write!(f, "Not connected"),
             Error::NotInitialized => write!(f, "System not initialized"),
+            Error::NoFeeEstimate => write!(f, "No fee estimate at this time"),
             Error::MalformedRequest(ref s) => write!(f, "Malformed request: {}", s),
             Error::MalformedResponse(ref s) => write!(f, "Malformed response: {}", s),
-            Error::HttpError(ref code) => write!(f, "Bad HTTP code: {}", code),
+            Error::HttpError(ref code, ref _headers, ref _body_offset) => {
+                write!(f, "Bad HTTP code: {}", code)
+            }
             Error::RPCError(ref msg) => write!(f, "RPC error: {}", msg),
+            Error::Storage(ref msg) => write!(f, "Storage error: {}", msg),
             Error::Clarity(ref err) => write!(f, "Clarity error: {}", err),
         }
     }
@@ -138,7 +148,7 @@ impl fmt::Display for Error {
 impl error::Error for Error {
     fn cause(&self) -> Option<&dyn error::Error> {
         match *self {
-            Error::FailedToRun(_) => None,
+            Error::FailedToRun(..) => None,
             Error::FailedToExecute(..) => None,
             Error::KilledBySignal(_) => None,
             Error::BadExit(_) => None,
@@ -148,10 +158,12 @@ impl error::Error for Error {
             Error::Deserialize(_) => None,
             Error::NotConnected => None,
             Error::NotInitialized => None,
+            Error::NoFeeEstimate => None,
             Error::MalformedRequest(_) => None,
             Error::MalformedResponse(_) => None,
-            Error::HttpError(_) => None,
+            Error::HttpError(..) => None,
             Error::RPCError(_) => None,
+            Error::Storage(_) => None,
             Error::Clarity(_) => None,
         }
     }

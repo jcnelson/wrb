@@ -41,6 +41,7 @@ use crate::runner::Runner;
 
 mod wrbpod;
 
+#[derive(Clone)]
 pub struct MockStackerDBClient {
     pub privkey: StacksPrivateKey,
     pub num_slots: u32,
@@ -62,6 +63,11 @@ impl MockStackerDBClient {
 }
 
 impl StackerDBClient for MockStackerDBClient {
+    fn get_host(&self) -> SocketAddr {
+        let addr: SocketAddr = "127.0.0.1:30443".parse().unwrap();
+        addr
+    }
+
     fn list_chunks(&mut self) -> Result<Vec<SlotMetadata>, RuntimeError> {
         if let Some(error) = self.mock_failure.as_ref() {
             return Err(error.clone());

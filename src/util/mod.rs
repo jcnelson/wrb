@@ -52,5 +52,5 @@ pub const DEFAULT_CHAIN_ID: u32 = CHAIN_ID_MAINNET;
 pub fn privkey_to_principal(privk: &Secp256k1PrivateKey, version: u8) -> StandardPrincipalData {
     let pubk = Secp256k1PublicKey::from_private(privk);
     let h = Hash160::from_node_public_key(&pubk);
-    StandardPrincipalData(version, h.0)
+    StandardPrincipalData::new(version, h.0).expect("FATAL: invalid version")
 }

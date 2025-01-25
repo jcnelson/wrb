@@ -4,6 +4,7 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
+#[macro_use]
 extern crate stacks_common;
 
 #[macro_use]
@@ -29,6 +30,7 @@ pub mod util;
 pub mod core;
 pub mod runner;
 pub mod storage;
+pub mod tx;
 pub mod ui;
 pub mod viewer;
 pub mod vm;
@@ -39,11 +41,21 @@ use std::io::{stdin, stdout, Read};
 use std::path::Path;
 use std::process;
 use std::thread;
+use std::time::Duration;
 
 use crate::core::Config;
 use crate::runner::bns::BNSResolver;
 use crate::runner::bns::NodeBNSResolver;
+use crate::runner::site::WrbTxtRecord;
+use crate::runner::site::WrbTxtRecordV1;
+use crate::runner::site::ZonefileResourceRecord;
+use crate::runner::Error as RunnerError;
 use crate::runner::Runner;
+
+use crate::runner::tx::StacksAccount;
+use crate::tx::TransactionVersion;
+use crate::tx::Txid;
+
 use crate::ui::events::WrbChannels;
 use crate::ui::events::WrbEvent;
 use crate::ui::Renderer;
@@ -53,6 +65,7 @@ use crate::vm::ClarityVM;
 use crate::util::privkey_to_principal;
 use crate::util::{DEFAULT_WRB_CLARITY_VERSION, DEFAULT_WRB_EPOCH};
 
+use crate::storage::StackerDBClient;
 use crate::storage::Wrbpod;
 use crate::storage::WrbpodSlices;
 use crate::storage::WrbpodSuperblock;
@@ -61,9 +74,16 @@ use crate::core::globals::redirect_logfile;
 use crate::core::with_global_config;
 use crate::core::with_globals;
 
+use crate::runner::stackerdb::StackerDBSession;
+
 use crate::vm::clarity_vm::vm_execute;
 
+use crate::tx::{
+    make_contract_call, StacksTransaction, TransactionPostCondition, TransactionPostConditionMode,
+};
+
 use clarity::vm::types::QualifiedContractIdentifier;
+use clarity::vm::types::StacksAddressExtensions;
 use clarity::vm::types::TupleData;
 use clarity::vm::ClarityName;
 use clarity::vm::Value;
@@ -72,11 +92,15 @@ use stacks_common::address::{
     C32_ADDRESS_VERSION_MAINNET_SINGLESIG, C32_ADDRESS_VERSION_TESTNET_SINGLESIG,
 };
 use stacks_common::types::chainstate::StacksAddress;
+use stacks_common::types::chainstate::StacksPublicKey;
 use stacks_common::util::hash::hex_bytes;
 use stacks_common::util::hash::to_hex;
 use stacks_common::util::hash::Hash160;
+use stacks_common::util::secp256k1::Secp256k1PrivateKey;
 
 use crate::stacks_common::codec::StacksMessageCodec;
+
+use libstackerdb::StackerDBChunkData;
 
 const DEFAULT_CONFIG: &str = ".wrb/config.toml";
 
@@ -125,8 +149,8 @@ fn usage(msg: &str) {
     process::exit(1);
 }
 
-/// Resolve a name to its wrbsite
-fn wrbsite_load(wrbsite_name: &str) -> Result<Vec<u8>, String> {
+/// Split a wrbsite name into its name and namespace
+fn split_fqn(wrbsite_name: &str) -> Result<(String, String), String> {
     let mut wrbsite_split = wrbsite_name.split(".");
     let Some(name) = wrbsite_split.next() else {
         return Err("Malformed wrbsite name -- no '.'".to_string());
@@ -134,7 +158,12 @@ fn wrbsite_load(wrbsite_name: &str) -> Result<Vec<u8>, String> {
     let Some(namespace) = wrbsite_split.next() else {
         return Err("Malformed wrbsite name -- no namespace".to_string());
     };
+    Ok((name.to_string(), namespace.to_string()))
+}
 
+/// Resolve a name to its wrbsite
+fn wrbsite_load(wrbsite_name: &str) -> Result<Vec<u8>, String> {
+    let (name, namespace) = split_fqn(wrbsite_name)?;
     let (node_host, node_port) =
         with_global_config(|cfg| cfg.get_node_addr()).expect("FATAL: system not initialized");
     let bns_contract_id =
@@ -406,10 +435,9 @@ fn get_wrbpod_contract_id(argv: &mut Vec<String>) -> Result<QualifiedContractIde
                 C32_ADDRESS_VERSION_TESTNET_SINGLESIG
             },
         );
-        let addr = StacksAddress {
-            version: principal.0,
-            bytes: Hash160(principal.1),
-        };
+        let addr = StacksAddress::new(principal.version(), Hash160(principal.1.clone()))
+            .map_err(|e| format!("could not create address: {:?}", &e))?;
+
         let addr_str = format!("{}.wrbpod", &addr);
         addr_str
     };
@@ -991,8 +1019,47 @@ fn subcommand_wrbpod(mut argv: Vec<String>, wrbsite_data_source_opt: Option<Stri
         });
         return;
     }
+
     eprintln!("Unrecognized `wrbpod` command '{}'", &cmd);
     process::exit(1);
+}
+
+/// bns subcommand to resolve a BNS name to its zonefile.
+/// Infallible; factored out here for use in multiple CLI commands.
+fn subcommand_bns_resolve(wrbsite_name: &str) -> Option<Vec<u8>> {
+    let (name, namespace) = split_fqn(wrbsite_name).unwrap_or_else(|e| {
+        eprintln!("FATAL: could not decode name: {}", &e);
+        process::exit(1);
+    });
+
+    let (node_host, node_port) =
+        with_global_config(|cfg| cfg.get_node_addr()).expect("FATAL: system not initialized");
+    let bns_contract_id =
+        with_global_config(|cfg| cfg.get_bns_contract_id()).expect("FATAL: system not initialized");
+    let mut runner = Runner::new(bns_contract_id, node_host, node_port);
+
+    let mut bns_resolver = NodeBNSResolver::new();
+    let zonefile_opt = bns_resolver
+        .lookup(&mut runner, &name, &namespace)
+        .map_err(|e| {
+            eprintln!(
+                "FATAL: failed to resolve '{}': system error: {:?}",
+                &wrbsite_name, &e
+            );
+            process::exit(1);
+        })
+        .unwrap()
+        .map_err(|bns_e| {
+            eprintln!(
+                "FATAL: failed to resolve '{}': BNS error: {:?}",
+                &wrbsite_name, &bns_e
+            );
+            process::exit(1);
+        })
+        .unwrap()
+        .zonefile;
+
+    zonefile_opt
 }
 
 /// bns subcommand helper
@@ -1005,10 +1072,10 @@ fn subcommand_bns(mut argv: Vec<String>) {
     let cmd = argv[2].clone();
     if cmd == "resolve" {
         if argv.len() < 4 {
-            eprintln!("Usage: {} bns {} [-r] NAME", &argv[0], &cmd);
+            eprintln!("Usage: {} bns {} [-r|--raw-hex] NAME", &argv[0], &cmd);
             process::exit(1);
         }
-        let raw = consume_arg(&mut argv, &["-r", "--raw"], false)
+        let raw = consume_arg(&mut argv, &["-r", "--raw-hex"], false)
             .map_err(|e| {
                 usage(&e);
                 unreachable!()
@@ -1016,42 +1083,7 @@ fn subcommand_bns(mut argv: Vec<String>) {
             .unwrap();
 
         let wrbsite_name = argv[3].clone();
-        let mut wrbsite_split = wrbsite_name.split(".");
-        let Some(name) = wrbsite_split.next() else {
-            eprintln!("Malformed wrbsite name -- no '.'");
-            process::exit(1);
-        };
-        let Some(namespace) = wrbsite_split.next() else {
-            eprintln!("Malformed wrbsite name -- no namespace");
-            process::exit(1);
-        };
-
-        let (node_host, node_port) =
-            with_global_config(|cfg| cfg.get_node_addr()).expect("FATAL: system not initialized");
-        let bns_contract_id = with_global_config(|cfg| cfg.get_bns_contract_id())
-            .expect("FATAL: system not initialized");
-        let mut runner = Runner::new(bns_contract_id, node_host, node_port);
-
-        let mut bns_resolver = NodeBNSResolver::new();
-        let zonefile = bns_resolver
-            .lookup(&mut runner, &name, &namespace)
-            .map_err(|e| {
-                eprintln!(
-                    "FATAL: failed to resolve '{}': system error: {:?}",
-                    &wrbsite_name, &e
-                );
-                process::exit(1);
-            })
-            .unwrap()
-            .map_err(|bns_e| {
-                eprintln!(
-                    "FATAL: failed to resolve '{}': BNS error: {:?}",
-                    &wrbsite_name, &bns_e
-                );
-                process::exit(1);
-            })
-            .unwrap()
-            .zonefile
+        let zonefile = subcommand_bns_resolve(&wrbsite_name)
             .or_else(|| {
                 eprintln!("FATAL: BNS name '{}' has no zonefile", &wrbsite_name);
                 process::exit(1);
@@ -1071,6 +1103,566 @@ fn subcommand_bns(mut argv: Vec<String>) {
 
     eprintln!("Unrecognized `bns` command '{}'", &cmd);
     process::exit(1);
+}
+
+/// Make a runner
+fn make_runner() -> Runner {
+    let (node_host, node_port) =
+        with_global_config(|cfg| cfg.get_node_addr()).expect("FATAL: system not initialized");
+    let bns_contract_id =
+        with_global_config(|cfg| cfg.get_bns_contract_id()).expect("FATAL: system not initialized");
+    let runner = Runner::new(bns_contract_id, node_host, node_port);
+    runner
+}
+
+/// Open a StackerDB session to the home node
+fn open_home_stackerdb_session(
+    contract_id: QualifiedContractIdentifier,
+) -> Result<Box<dyn StackerDBClient>, String> {
+    let privkey = with_global_config(|cfg| cfg.private_key().clone())
+        .ok_or("System is not initialized".to_string())?;
+    let mut runner = make_runner();
+    let home_stackerdb_client = runner
+        .get_home_stackerdb_client(contract_id.clone(), privkey.clone())
+        .map_err(|e| {
+            format!(
+                "Failed to instantiate StackerDB client to {}: {:?}",
+                contract_id, &e
+            )
+        })?;
+
+    Ok(home_stackerdb_client)
+}
+
+/// Open a StackerDB session to the replica node
+fn open_replica_stackerdb_session(
+    contract_id: QualifiedContractIdentifier,
+) -> Result<Box<dyn StackerDBClient>, String> {
+    let privkey = with_global_config(|cfg| cfg.private_key().clone())
+        .ok_or("System is not initialized".to_string())?;
+    let mut runner = make_runner();
+    let replica_stackerdb_client = runner
+        .get_replica_stackerdb_client(contract_id.clone(), privkey.clone())
+        .map_err(|e| {
+            format!(
+                "Failed to instantiate StackerDB client to {}: {:?}",
+                contract_id, &e
+            )
+        })?;
+
+    Ok(replica_stackerdb_client)
+}
+
+/// Get code bytes from a contract as part of a CLI command
+fn wrbsite_load_code_bytes(
+    contract_id: &QualifiedContractIdentifier,
+    slot_id: u32,
+) -> Option<Vec<u8>> {
+    let mut stackerdb_session =
+        open_replica_stackerdb_session(contract_id.clone()).unwrap_or_else(|e| {
+            eprintln!(
+                "FATAL: failed to connect to StackerDB {} on replica node: {}",
+                &contract_id, &e
+            );
+            process::exit(1);
+        });
+
+    let code_bytes_opt = stackerdb_session
+        .get_latest_chunks(&[slot_id])
+        .unwrap_or_else(|e| {
+            eprintln!("FATAL: failed to get site code chunk: {:?}", &e);
+            process::exit(1);
+        })
+        .pop()
+        .expect("FATAL(BUG): no slot value returned");
+
+    code_bytes_opt
+}
+
+/// Get the fee for a transaction and generate it
+fn make_tx<F>(
+    runner: &mut Runner,
+    fee_opt: Option<u64>,
+    mut tx_gen: F,
+) -> Result<StacksTransaction, String>
+where
+    F: FnMut(u64) -> StacksTransaction,
+{
+    if let Some(fee) = fee_opt {
+        return Ok(tx_gen(fee));
+    }
+
+    let tx_no_fee = tx_gen(0);
+    let fee_estimate = runner.get_tx_fee(&tx_no_fee).map_err(|e| match e {
+        RunnerError::NoFeeEstimate => {
+            "Failed to learn fee estimate from node. Please pass a fee via -f or --fee.".to_string()
+        }
+        e => {
+            format!("Failed to get transaction fee: {:?}", &e)
+        }
+    })?;
+
+    if fee_estimate.estimations.len() == 0 {
+        return Err("No fee estimation reported. Please pass a fee via -f or --fee.".into());
+    }
+
+    // take middle fee
+    let est = fee_estimate.estimations.len() / 2;
+    let tx_with_fee = tx_gen(fee_estimate.estimations[est].fee);
+    Ok(tx_with_fee)
+}
+
+/// Poll a transaction's origin and optionally sponsor accounts
+fn poll_tx_accounts(
+    runner: &mut Runner,
+    tx: &StacksTransaction,
+) -> Result<(StacksAccount, Option<StacksAccount>), RunnerError> {
+    let mainnet = tx.version == TransactionVersion::Mainnet;
+
+    let origin_addr = if mainnet {
+        tx.auth.origin().address_mainnet()
+    } else {
+        tx.auth.origin().address_testnet()
+    }
+    .to_account_principal();
+
+    let origin_account = runner.get_account(&origin_addr)?;
+
+    let sponsor_account = if let Some(sponsor) = tx.auth.sponsor() {
+        let sponsor_addr = if mainnet {
+            sponsor.address_mainnet()
+        } else {
+            sponsor.address_testnet()
+        }
+        .to_account_principal();
+        Some(runner.get_account(&sponsor_addr)?)
+    } else {
+        None
+    };
+
+    Ok((origin_account, sponsor_account))
+}
+
+/// Post a transaction and wait for it to get confirmed
+fn post_tx(runner: &mut Runner, tx: &StacksTransaction) -> Result<Txid, String> {
+    let (origin_account_before, sponsor_account_before_opt) = poll_tx_accounts(runner, tx)
+        .map_err(|e| format!("Failed to query transaction accounts: {:?}", &e))?;
+
+    runner
+        .post_tx(tx)
+        .map_err(|e| format!("Failed to post transaction: {:?}", &e))?;
+
+    loop {
+        thread::sleep(Duration::from_secs(1));
+
+        let (origin_account, sponsor_account_opt) = poll_tx_accounts(runner, tx)
+            .map_err(|e| format!("Failed to query transaction accounts: {:?}", &e))?;
+
+        if origin_account.nonce == origin_account_before.nonce {
+            continue;
+        }
+
+        let Some(sponsor_account_before) = sponsor_account_before_opt.as_ref() else {
+            break;
+        };
+        let Some(sponsor_account) = sponsor_account_opt.as_ref() else {
+            break;
+        };
+
+        if sponsor_account_before.nonce == sponsor_account.nonce {
+            continue;
+        }
+
+        break;
+    }
+
+    Ok(tx.txid())
+}
+
+/// site upload
+fn subcommand_site_upload(argv: Vec<String>) {
+    let cmd = argv[2].clone();
+    if argv.len() < 6 {
+        eprintln!(
+            "Usage: {} site {} WRBPOD_CONTRACT_ID SLOT_ID PATH_TO_SITE_CODE",
+            &argv[0], &cmd
+        );
+        process::exit(1);
+    }
+
+    let contract_id = QualifiedContractIdentifier::parse(&argv[3]).unwrap_or_else(|e| {
+        eprintln!("FATAL: invalid contract ID '{}': {:?}", &argv[3], &e);
+        process::exit(1);
+    });
+
+    let slot_id = argv[4].parse::<u32>().unwrap_or_else(|e| {
+        eprintln!(
+            "FATAL: could not parse '{}' into slot ID: {:?}",
+            &argv[4], &e
+        );
+        process::exit(1);
+    });
+
+    let path_to_code = &argv[5];
+    let code = if path_to_code == "-" {
+        let mut fd = stdin();
+        let mut code_bytes = vec![];
+        fd.read_to_end(&mut code_bytes)
+            .map_err(|e| {
+                eprintln!("FATAL: failed to load code from stdin: {:?}", &e);
+                process::exit(1);
+            })
+            .unwrap();
+        code_bytes
+    } else {
+        if let Err(e) = fs::metadata(path_to_code) {
+            eprintln!("FATAL: could not open '{}': {:?}", path_to_code, &e);
+            process::exit(1);
+        }
+        fs::read(path_to_code)
+            .map_err(|e| {
+                eprintln!(
+                    "FATAL: failed to read code from {}: {:?}",
+                    &path_to_code, &e
+                );
+                process::exit(1);
+            })
+            .unwrap()
+    };
+
+    let code_bytes = Renderer::encode_bytes(&code).unwrap_or_else(|e| {
+        eprintln!("FATAL: failed to encode site code: {:?}", &e);
+        process::exit(1);
+    });
+
+    let mut stackerdb_session =
+        open_replica_stackerdb_session(contract_id.clone()).unwrap_or_else(|e| {
+            eprintln!(
+                "FATAL: failed to connect to StackerDB {} on replica node: {}",
+                &contract_id, &e
+            );
+            process::exit(1);
+        });
+
+    let slots_metadata = stackerdb_session.list_chunks().unwrap_or_else(|e| {
+        eprintln!(
+            "FATAL: failed to list chunks on StackerDB {} on replica node {}: {}",
+            &contract_id,
+            &stackerdb_session.get_host(),
+            &e
+        );
+        process::exit(1);
+    });
+
+    let slot_version = slots_metadata
+        .get(slot_id as usize)
+        .map(|slot_md| slot_md.slot_version)
+        .unwrap_or_else(|| {
+            eprintln!(
+                "FATAL: no such StackerDB slot {} in {}",
+                slot_id, &contract_id
+            );
+            process::exit(1);
+        });
+
+    let privkey =
+        with_global_config(|cfg| cfg.private_key().clone()).expect("System is not initialized");
+
+    let mut chunk_data = StackerDBChunkData::new(slot_id, slot_version + 1, code_bytes);
+    chunk_data.sign(&privkey).unwrap_or_else(|e| {
+        eprintln!("FATAL: failed to sign chunk: {:?}", &e);
+        process::exit(1);
+    });
+
+    let ack = stackerdb_session.put_chunk(chunk_data).unwrap_or_else(|e| {
+        eprintln!("FATAL: failed to upload site code chunk: {:?}", &e);
+        process::exit(1);
+    });
+
+    if !ack.accepted {
+        println!("{:?}", &ack);
+    }
+    process::exit(if ack.accepted { 0 } else { 1 });
+}
+
+/// site subcommand download
+fn subcommand_site_download(argv: Vec<String>) {
+    let cmd = argv[2].clone();
+    if argv.len() < 5 {
+        eprintln!(
+            "Usage: {} site {} WRBPOD_CONTRACT_ID SLOT_ID",
+            &argv[0], &cmd
+        );
+        process::exit(1);
+    }
+
+    let contract_id = QualifiedContractIdentifier::parse(&argv[3]).unwrap_or_else(|e| {
+        eprintln!("FATAL: invalid contract ID '{}': {:?}", &argv[3], &e);
+        process::exit(1);
+    });
+
+    let slot_id = argv[4].parse::<u32>().unwrap_or_else(|e| {
+        eprintln!(
+            "FATAL: could not parse '{}' into slot ID: {:?}",
+            &argv[4], &e
+        );
+        process::exit(1);
+    });
+
+    let code_bytes = wrbsite_load_code_bytes(&contract_id, slot_id).unwrap_or_else(|| {
+        eprintln!(
+            "FATAL: no code for slot {} in StackerDB {}",
+            slot_id, &contract_id
+        );
+        process::exit(1);
+    });
+
+    let code = Renderer::decode_bytes(&code_bytes).unwrap_or_else(|e| {
+        eprintln!("FATAL: failed to decode site code: {:?}", &e);
+        process::exit(1);
+    });
+
+    println!("{}", String::from_utf8_lossy(&code));
+    process::exit(0);
+}
+
+/// site subcommand publish
+fn subcommand_site_publish(mut argv: Vec<String>) {
+    let cmd = argv[2].clone();
+    if argv.len() < 6 {
+        eprintln!("Usage: {} site {} [-n|--dry-run] [-r|--raw-hex] [-k|--name-private-key KEY] [-f|--fee FEE] WRBPOD_CONTRACT_ID SLOT_ID WRBSITE_NAME", &argv[0], &cmd);
+        process::exit(1);
+    }
+    let dry_run = consume_arg(&mut argv, &["-n", "--dry-run", "-r", "--raw-hex"], false)
+        .map_err(|e| {
+            usage(&e);
+            unreachable!()
+        })
+        .unwrap();
+
+    let raw = consume_arg(&mut argv, &["-n", "--dry-run", "-r", "--raw-hex"], false)
+        .map_err(|e| {
+            usage(&e);
+            unreachable!()
+        })
+        .unwrap();
+
+    let name_privkey_opt = consume_arg(&mut argv, &["-k", "--private-key"], true)
+        .map_err(|e| {
+            usage(&e);
+            unreachable!()
+        })
+        .unwrap()
+        .map(|k_str| {
+            Secp256k1PrivateKey::from_hex(&k_str)
+                .map_err(|e| {
+                    usage(&e);
+                    unreachable!();
+                })
+                .unwrap()
+        });
+
+    let tx_fee_opt = consume_arg(&mut argv, &["-f", "--fee"], true)
+        .map_err(|e| {
+            usage(&e);
+            unreachable!()
+        })
+        .unwrap()
+        .map(|fee_str| {
+            fee_str
+                .parse::<u64>()
+                .map_err(|e| {
+                    usage(&format!("{:?}", &e));
+                    unreachable!();
+                })
+                .unwrap()
+        });
+
+    let contract_id = QualifiedContractIdentifier::parse(&argv[3]).unwrap_or_else(|e| {
+        eprintln!("FATAL: invalid contract ID '{}': {:?}", &argv[3], &e);
+        process::exit(1);
+    });
+
+    let slot_id = argv[4].parse::<u32>().unwrap_or_else(|e| {
+        eprintln!(
+            "FATAL: could not parse '{}' into slot ID: {:?}",
+            &argv[4], &e
+        );
+        process::exit(1);
+    });
+
+    let wrbsite_name = argv[5].clone();
+    let (name, namespace) = split_fqn(&wrbsite_name).unwrap_or_else(|e| {
+        eprintln!("FATAL: could not decode '{}': {}", &wrbsite_name, &e);
+        process::exit(1);
+    });
+
+    let mut stackerdb_session =
+        open_replica_stackerdb_session(contract_id.clone()).unwrap_or_else(|e| {
+            eprintln!(
+                "FATAL: failed to connect to StackerDB {} on replica node: {}",
+                &contract_id, &e
+            );
+            process::exit(1);
+        });
+
+    let slots_metadata = stackerdb_session.list_chunks().unwrap_or_else(|e| {
+        eprintln!(
+            "FATAL: failed to list chunks on StackerDB {} on replica node {}: {}",
+            &contract_id,
+            &stackerdb_session.get_host(),
+            &e
+        );
+        process::exit(1);
+    });
+
+    let slot_version = slots_metadata
+        .get(slot_id as usize)
+        .map(|slot_md| slot_md.slot_version)
+        .unwrap_or_else(|| {
+            eprintln!(
+                "FATAL: no such StackerDB slot {} in {}",
+                slot_id, &contract_id
+            );
+            process::exit(1);
+        });
+
+    let code_bytes = stackerdb_session
+        .get_chunks(&[(slot_id, slot_version)])
+        .unwrap_or_else(|e| {
+            eprintln!("FATAL: failed to get site code chunk: {:?}", &e);
+            process::exit(1);
+        })
+        .pop()
+        .expect("FATAL(BUG): no slot value returned")
+        .unwrap_or_else(|| {
+            eprintln!(
+                "FATAL: no code for slot {} in StackerDB {}",
+                slot_id, &contract_id
+            );
+            process::exit(1);
+        });
+
+    // reconstruct the chunk
+    let (privkey, mainnet) = with_global_config(|cfg| (cfg.private_key().clone(), cfg.mainnet()))
+        .expect("System is not initialized");
+
+    let name_privkey = name_privkey_opt.unwrap_or(privkey.clone());
+
+    let mut chunk_data = StackerDBChunkData::new(slot_id, slot_version, code_bytes);
+    chunk_data.sign(&privkey).unwrap_or_else(|e| {
+        eprintln!("FATAL: failed to sign chunk: {:?}", &e);
+        process::exit(1);
+    });
+
+    let metadata = chunk_data.get_slot_metadata();
+
+    let mut zonefile = subcommand_bns_resolve(&wrbsite_name)
+        .unwrap_or(format!("$ORIGIN {}\n\n", &wrbsite_name).as_bytes().to_vec());
+
+    let mut wrb_rr_bytes = ZonefileResourceRecord::try_from(WrbTxtRecord::V1(WrbTxtRecordV1::new(
+        contract_id.clone(),
+        metadata,
+    )))
+    .expect("FATAL: could not construct a zonefile resource record for this wrbsite")
+    .to_string()
+    .as_bytes()
+    .to_vec();
+
+    zonefile.append(&mut "\n".as_bytes().to_vec());
+    zonefile.append(&mut wrb_rr_bytes);
+    if zonefile.len() > 8192 {
+        eprintln!(
+            "FATAL: new zonefile is too big (exceeds 8192 bytes)\nZonefile:\n{}",
+            String::from_utf8_lossy(&zonefile)
+        );
+        process::exit(1);
+    }
+
+    if dry_run.is_some() {
+        if raw.is_some() {
+            let zonefile_hex = to_hex(&zonefile);
+            println!("{}", &zonefile_hex);
+        } else {
+            println!("{}", &String::from_utf8_lossy(&zonefile));
+        }
+        process::exit(0);
+    }
+
+    let addr = StacksAddress::p2pkh(mainnet, &StacksPublicKey::from_private(&name_privkey))
+        .to_account_principal();
+    let mut runner = make_runner();
+    let account = runner.get_account(&addr).unwrap_or_else(|e| {
+        panic!("FATAL: failed to look up account {}: {:?}", &addr, &e);
+    });
+
+    let bns_address = StacksAddress::new(
+        runner.get_bns_contract_id().issuer.version(),
+        Hash160(runner.get_bns_contract_id().issuer.1.clone()),
+    )
+    .expect("Infallible");
+
+    let tx = make_tx(&mut runner, tx_fee_opt, |fee_rate| {
+        make_contract_call(
+            mainnet,
+            &name_privkey,
+            account.nonce,
+            fee_rate,
+            &bns_address,
+            "zonefile-resolver",
+            "update-zonefile",
+            &[
+                Value::buff_from(name.as_bytes().to_vec())
+                    .expect("FATAL: name could not be converted to a buffer"),
+                Value::buff_from(namespace.as_bytes().to_vec())
+                    .expect("FATAL: namespace could not be converted to a buffer"),
+                Value::some(
+                    Value::buff_from(zonefile.clone())
+                        .expect("FATAL: could not convert zonefile to buffer"),
+                )
+                .expect("FATAL: could not create (some zonefile)"),
+            ],
+            TransactionPostConditionMode::Deny,
+            vec![],
+        )
+        .expect("FATAL: could not make update-zonefile transaction")
+    })
+    .unwrap_or_else(|e| {
+        eprintln!(
+            "FATAL: failed to generate zonefile-update transaction: {}",
+            &e
+        );
+        process::exit(1);
+    });
+
+    let txid = post_tx(&mut runner, &tx).unwrap_or_else(|e| {
+        wrb_debug!("{}", &to_hex(&tx.serialize_to_vec()));
+        eprintln!("FATAL: failed to post zonefile-update transaction: {}", &e);
+        process::exit(1);
+    });
+
+    println!("{}", &txid);
+    process::exit(0);
+}
+
+/// site subcommand helper
+/// Commands start at argv[2]
+fn subcommand_site(argv: Vec<String>) {
+    if argv.len() < 3 {
+        eprintln!("Usage: {} site [subcommand] [options]", &argv[0]);
+        process::exit(1);
+    }
+    let cmd = argv[2].clone();
+    if cmd == "upload" {
+        subcommand_site_upload(argv);
+    } else if cmd == "download" {
+        subcommand_site_download(argv);
+    } else if cmd == "publish" {
+        subcommand_site_publish(argv);
+    } else {
+        usage("Unrecognized subcommand");
+        unreachable!();
+    }
 }
 
 fn main() {
@@ -1171,6 +1763,10 @@ fn main() {
     } else if cmd == "bns" {
         // bns tooling mode
         subcommand_bns(argv);
+        process::exit(0);
+    } else if cmd == "site" {
+        // site tooling mode
+        subcommand_site(argv);
         process::exit(0);
     }
 

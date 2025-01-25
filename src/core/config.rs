@@ -89,9 +89,11 @@ impl Config {
             )
             .unwrap()
         } else {
-            // TODO: This is wrong
-            QualifiedContractIdentifier::parse("ST000000000000000000002AMW42H.zonefile-resolver")
-                .unwrap()
+            // private key: e89bb394ecd5161007a84b34ac98d4f7239016c91d3e0c7c3b97aa499693288301
+            QualifiedContractIdentifier::parse(
+                "ST1V5THTGSFT6Z793AT7M2H18G3Y9EGVJZNH5E2BG.zonefile-resolver",
+            )
+            .unwrap()
         }
     }
 

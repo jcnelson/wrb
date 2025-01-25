@@ -68,9 +68,7 @@ fn test_render_codec() {
     let bytes = Renderer::encode_bytes(txt.as_bytes()).unwrap();
 
     let mut bytes_decoded = vec![];
-    renderer
-        .decode(&mut &bytes[..], &mut bytes_decoded)
-        .unwrap();
+    Renderer::decode(&mut &bytes[..], &mut bytes_decoded).unwrap();
     let s = std::str::from_utf8(&bytes_decoded).unwrap();
 
     assert_eq!(&s, &txt);

@@ -22,6 +22,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::net::TcpStream;
 
+use clarity::vm::errors::InterpreterError;
 use clarity::vm::types::PrincipalData;
 use clarity::vm::types::QualifiedContractIdentifier;
 use clarity::vm::types::StandardPrincipalData;
@@ -127,6 +128,10 @@ impl StackerDBSession {
 }
 
 impl StackerDBClient for StackerDBSession {
+    fn get_host(&self) -> SocketAddr {
+        self.host.clone()
+    }
+
     /// query the replica for a list of chunks
     fn list_chunks(&mut self) -> Result<Vec<SlotMetadata>, Error> {
         let bytes = self.rpc_request(
@@ -154,9 +159,9 @@ impl StackerDBClient for StackerDBSession {
             );
             let chunk = match self.rpc_request("GET", &path, None, &[]) {
                 Ok(body_bytes) => Some(body_bytes),
-                Err(Error::HttpError(code)) => {
+                Err(Error::HttpError(code, headers, offset)) => {
                     if code != 404 {
-                        return Err(Error::HttpError(code));
+                        return Err(Error::HttpError(code, headers, offset));
                     }
                     None
                 }
@@ -176,9 +181,9 @@ impl StackerDBClient for StackerDBSession {
             let path = stackerdb_get_chunk_path(self.stackerdb_contract_id.clone(), *slot_id, None);
             let chunk = match self.rpc_request("GET", &path, None, &[]) {
                 Ok(body_bytes) => Some(body_bytes),
-                Err(Error::HttpError(code)) => {
+                Err(Error::HttpError(code, headers, offset)) => {
                     if code != 404 {
-                        return Err(Error::HttpError(code));
+                        return Err(Error::HttpError(code, headers, offset));
                     }
                     None
                 }
@@ -221,10 +226,12 @@ impl Runner {
         contract_id: &QualifiedContractIdentifier,
     ) -> Result<Vec<SocketAddr>, Error> {
         let mut sock = TcpStream::connect(node_addr)?;
-        let stacks_address = StacksAddress {
-            version: contract_id.issuer.0,
-            bytes: Hash160(contract_id.issuer.1.clone()),
-        };
+        let stacks_address = StacksAddress::new(
+            contract_id.issuer.version(),
+            Hash160(contract_id.issuer.1.clone()),
+        )
+        .map_err(|e| Error::Serialize(format!("Failed to build a Stacks address: {:?}", &e)))?;
+
         let bytes = run_http_request(
             &mut sock,
             node_addr,
@@ -392,9 +399,9 @@ impl Runner {
         let mut sock = TcpStream::connect(node_addr)?;
         let chunk_opt = match run_http_request(&mut sock, &node_addr, "GET", &path, None, &[]) {
             Ok(body_bytes) => Some(body_bytes),
-            Err(Error::HttpError(code)) => {
+            Err(Error::HttpError(code, headers, offset)) => {
                 if code != 404 {
-                    return Err(Error::HttpError(code));
+                    return Err(Error::HttpError(code, headers, offset));
                 }
                 None
             }
@@ -502,13 +509,14 @@ impl Runner {
         let node_addr = self
             .resolve_node()
             .map_err(|e| {
-                Error::Interpreter(
-                    InterpreterError::InterpreterError(format!("Unable to resolve node: {:?}", &e))
-                        .into(),
+                Error::FailedToRun(
+                    "Unable to resolve node".into(),
+                    vec![format!("Unable to resolve node: {:?}", &e)],
                 )
             })?
-            .ok_or(InterpreterError::InterpreterError(
+            .ok_or(Error::FailedToRun(
                 "Unable to resolve node".to_string(),
+                vec![],
             ))?;
 
         Ok(Box::new(StackerDBSession::new(node_addr, contract)))
@@ -521,9 +529,12 @@ impl Runner {
         _ignored: StacksPrivateKey,
     ) -> Result<Box<dyn StackerDBClient>, Error> {
         let node_addr = self.find_stackerdb(&contract).map_err(|e| {
-            Error::Interpreter(
-                InterpreterError::InterpreterError(format!("Unable to resolve node: {:?}", &e))
-                    .into(),
+            Error::FailedToRun(
+                format!("Unable to find replica for {}", &contract),
+                vec![format!(
+                    "Unable to find replica for {}: {:?}",
+                    &contract, &e
+                )],
             )
         })?;
 

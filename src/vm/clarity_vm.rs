@@ -267,7 +267,10 @@ impl ClarityVM {
         } else {
             C32_ADDRESS_VERSION_TESTNET_SINGLESIG
         };
-        QualifiedContractIdentifier::new(StandardPrincipalData(version, hash.0), "main".into())
+        QualifiedContractIdentifier::new(
+            StandardPrincipalData::new(version, hash.0).expect("Infallible"),
+            "main".into(),
+        )
     }
 
     /// Does there exist a code body with this ID?

@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-clarity = { path = "./stacks-blockchain/clarity" }
-stacks-common = { path = "./stacks-blockchain/stacks-common" }
-libstackerdb = { path = "./stacks-blockchain/libstackerdb" }
+clarity = { path = "./stacks-core/clarity" }
+stacks-common = { path = "./stacks-core/stacks-common" }
+libstackerdb = { path = "./stacks-core/libstackerdb" }
 
 dirs = "4.0.0"
 lzma-rs = "0.2.0"

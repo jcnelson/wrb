@@ -15,6 +15,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::net::SocketAddr;
+
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::env;
@@ -28,13 +30,16 @@ use clarity::vm::types::PrincipalData;
 use clarity::vm::types::QualifiedContractIdentifier;
 
 use crate::core::Config;
+
 use crate::runner;
 use crate::runner::bns::BNSResolver;
+use crate::runner::stackerdb::StackerDBSession;
 use crate::runner::Error;
 use crate::runner::Runner;
 
-use stacks_common::codec::{read_next, write_next, Error as CodecError, StacksMessageCodec};
+use crate::storage::StackerDBClient;
 
+use stacks_common::codec::{read_next, write_next, Error as CodecError, StacksMessageCodec};
 use stacks_common::util::hash::Sha512Trunc256Sum;
 use stacks_common::util::secp256k1::MessageSignature;
 
@@ -148,7 +153,7 @@ impl StacksMessageCodec for WrbTxtRecord {
 
 impl TryFrom<ZonefileResourceRecord> for WrbTxtRecord {
     type Error = runner::Error;
-    fn try_from(rr: ZonefileResourceRecord) -> Result<WrbTxtRecord, Self::Error> {
+    fn try_from(mut rr: ZonefileResourceRecord) -> Result<WrbTxtRecord, Self::Error> {
         if rr.rr_name != "wrb" {
             return Err(Self::Error::Deserialize(
                 "Resource record name is not 'wrb'".into(),
@@ -164,15 +169,25 @@ impl TryFrom<ZonefileResourceRecord> for WrbTxtRecord {
                 "Resource record class is not 'IN'".into(),
             ));
         }
-        if rr.rr_payload.len() == 0 {
-            // should be unreachable
-            return Err(Self::Error::Deserialize(
-                "Resource record payload is missing".into(),
-            ));
+
+        // de-quote
+        if rr.rr_payload.starts_with("\"") && rr.rr_payload.ends_with("\"") {
+            let Some(rr_payload) = rr.rr_payload.strip_prefix("\"").map(|s| s.to_string()) else {
+                return Err(Self::Error::Deserialize(
+                    "Failed to strip leading '\"'".into(),
+                ));
+            };
+            let Some(mut rr_payload) = rr_payload.strip_suffix("\"").map(|s| s.to_string()) else {
+                return Err(Self::Error::Deserialize(
+                    "Failed to strip trailing '\"'".into(),
+                ));
+            };
+            rr_payload = rr_payload.replace("\\\"", "\"");
+            rr.rr_payload = rr_payload;
         }
 
         // extract bytes
-        let bytes = Base64::decode_vec(&rr.rr_payload[0]).map_err(|e| {
+        let bytes = Base64::decode_vec(&rr.rr_payload).map_err(|e| {
             Self::Error::Deserialize(format!("Failed to decode base64 TXT: {:?}", &e))
         })?;
 
@@ -198,7 +213,7 @@ impl TryFrom<WrbTxtRecord> for ZonefileResourceRecord {
             rr_ttl: None,
             rr_class: "IN".into(),
             rr_type: "TXT".into(),
-            rr_payload: vec![bytes_b64],
+            rr_payload: bytes_b64,
         })
     }
 }
@@ -211,8 +226,9 @@ impl From<WrbTxtRecordV1> for WrbTxtRecord {
 
 impl ToString for ZonefileResourceRecord {
     fn to_string(&self) -> String {
-        let base_string = format!(
-            "{}\t{}\t{}\t{}\t",
+        let payload_quoted = Self::escape_string(&self.rr_payload).unwrap_or("\"\"".to_string());
+        format!(
+            "{}\t{}\t{}\t{}\t{}",
             &self.rr_name,
             &self
                 .rr_ttl
@@ -220,20 +236,9 @@ impl ToString for ZonefileResourceRecord {
                 .map(|ttl| format!("{}", &ttl))
                 .unwrap_or("".to_string()),
             &self.rr_class,
-            &self.rr_type
-        );
-
-        let quoted_payload = self
-            .rr_payload
-            .iter()
-            .map(|s| format!("\"{}\"", s.replace("\"", "\\\"")))
-            .fold(base_string, |mut rr_str, payload_str| {
-                rr_str.push_str(&payload_str);
-                rr_str.push_str(" ");
-                rr_str
-            });
-
-        quoted_payload
+            &self.rr_type,
+            &payload_quoted
+        )
     }
 }
 
@@ -257,8 +262,40 @@ pub struct ZonefileResourceRecord {
     pub rr_class: String,
     /// the record type (A, AAAA, MX, TXT, etc)
     pub rr_type: String,
-    /// the record text (not decoded)
-    pub rr_payload: Vec<String>,
+    /// the record text (unescaped)
+    pub rr_payload: String,
+}
+
+impl ZonefileResourceRecord {
+    pub fn escape_string(s: &str) -> Option<String> {
+        if !s.is_ascii() {
+            return None;
+        }
+        let mut s = s.replace("\\", "\\\\");
+        s = s.replace("\"", "\\\"");
+        Some(format!("\"{}\"", &s))
+    }
+
+    pub fn unescape_string(s: &str) -> Option<String> {
+        if !s.is_ascii() {
+            return None;
+        }
+        let mut s = if s.starts_with("\"") && s.ends_with("\"") {
+            let Some(s) = s.strip_prefix("\"").map(|s| s.to_string()) else {
+                return None;
+            };
+            let Some(s) = s.strip_suffix("\"").map(|s| s.to_string()) else {
+                return None;
+            };
+            s
+        } else {
+            s.to_string()
+        };
+
+        s = s.replace("\\\"", "\"");
+        s = s.replace("\\\\", "\\");
+        Some(s)
+    }
 }
 
 impl Runner {
@@ -288,16 +325,15 @@ impl Runner {
             let line = raw_line.trim();
             let tokens = line.split(&[' ', '\t']);
 
-            let mut first_parts = Vec::with_capacity(4);
+            let mut parts = Vec::with_capacity(4);
             let mut rr_ttl = None;
-            let mut rr_payload = vec![];
             let mut bad_line = false;
             for tok in tokens {
                 if tok.len() == 0 {
                     continue;
                 }
 
-                if first_parts.len() == 1 {
+                if parts.len() == 1 {
                     // maybe TTL?
                     if let Ok(ttl) = tok.parse::<u64>() {
                         rr_ttl = Some(ttl);
@@ -309,27 +345,22 @@ impl Runner {
                         bad_line = true;
                         break;
                     }
-                } else if first_parts.len() == 3 {
-                    rr_payload.push(tok.to_string());
-                    continue;
                 }
-
-                first_parts.push(tok.to_string());
+                parts.push(tok.to_string());
             }
 
-            if first_parts.len() < 3 || bad_line {
+            if parts.len() < 4 || bad_line {
                 // malformed
                 continue;
             }
 
-            if rr_payload.len() == 0 {
-                // malformed
-                continue;
-            }
-
-            let rr_type = first_parts.pop().expect("Unreachable -- checked length");
-            let rr_class = first_parts.pop().expect("Unreachable -- checked length");
-            let rr_name = first_parts.pop().expect("Unreachable -- checked length");
+            let rr_payload = ZonefileResourceRecord::unescape_string(
+                &parts.pop().expect("Unreachable -- checked length"),
+            )
+            .unwrap_or("".to_string());
+            let rr_type = parts.pop().expect("Unreachable -- checked length");
+            let rr_class = parts.pop().expect("Unreachable -- checked length");
+            let rr_name = parts.pop().expect("Unreachable -- checked length");
 
             recs.push(ZonefileResourceRecord {
                 rr_name,
@@ -345,46 +376,103 @@ impl Runner {
     /// Load a wrbsite, given the decoded wrb txt record.
     /// `wrbrec.slot_metadata` must have been authenticated.
     pub fn wrbsite_load_from_zonefile_rec(
-        &mut self,
-        wrbrec: WrbTxtRecordV1,
+        wrbrec: &WrbTxtRecordV1,
+        replica_stackerdb_client: &mut dyn StackerDBClient,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let Some(node_addr) = self.resolve_node()? else {
-            return Err(Error::NotConnected);
-        };
-        Self::run_get_stackerdb_chunk(
-            &node_addr,
-            &wrbrec.contract_id,
+        let mut chunks = replica_stackerdb_client.get_chunks(&[(
             wrbrec.slot_metadata.slot_id,
             wrbrec.slot_metadata.slot_version,
-        )
+        )])?;
+        if chunks.len() != 1 {
+            return Err(Error::Storage(format!(
+                "Failed to get StackerDB chunk for site {}[{}.{}]: did not get any slots",
+                &wrbrec.contract_id,
+                wrbrec.slot_metadata.slot_id,
+                wrbrec.slot_metadata.slot_version
+            )));
+        }
+
+        let Some(Some(chunk_bytes)) = chunks.pop() else {
+            return Err(Error::Storage(format!(
+                "Failed to get StackerDB chunk for site {}[{}.{}]: no slot data returned",
+                &wrbrec.contract_id,
+                wrbrec.slot_metadata.slot_id,
+                wrbrec.slot_metadata.slot_version
+            )));
+        };
+
+        // authenticate
+        let chunk_hash = Sha512Trunc256Sum::from_data(&chunk_bytes);
+        if chunk_hash != wrbrec.slot_metadata.data_hash {
+            return Err(Error::Storage(format!(
+                "Site hash mismatch for site {}[{}.{}]: {} != {}",
+                &wrbrec.contract_id,
+                wrbrec.slot_metadata.slot_id,
+                wrbrec.slot_metadata.slot_version,
+                &wrbrec.slot_metadata.data_hash,
+                &chunk_hash
+            )));
+        }
+
+        Ok(Some(chunk_bytes))
     }
 
     /// Load a wrbsite, given the zonefile of a BNS name
-    pub fn wrbsite_load_from_zonefile(
+    pub fn wrbsite_load_from_zonefile<F, G>(
         &mut self,
         zonefile: Vec<u8>,
-    ) -> Result<Option<Vec<u8>>, Error> {
+        mut home_connector: F,
+        mut replica_connector: G,
+    ) -> Result<Option<Vec<u8>>, Error>
+    where
+        F: FnMut(
+            &QualifiedContractIdentifier,
+            &SocketAddr,
+        ) -> Result<Box<dyn StackerDBClient>, Error>,
+        G: FnMut(
+            &QualifiedContractIdentifier,
+            &SocketAddr,
+        ) -> Result<Box<dyn StackerDBClient>, Error>,
+    {
+        let Some(home_node_addr) = self.resolve_node()? else {
+            return Err(Error::NotConnected);
+        };
         let recs = Self::decode_zonefile_records(zonefile)?;
 
-        for rec in recs.into_iter() {
+        let mut error_reasons = vec![];
+        for (i, rec) in recs.into_iter().enumerate() {
             let rec_txt = rec.to_string();
             if rec.rr_name.as_str() != "wrb" {
+                wrb_debug!("RR class is not 'wrb': '{}'", &rec_txt);
+                error_reasons.push(format!("Invalid name in record {} of '{}'", i, &rec_txt));
                 continue;
             }
             if rec.rr_class.as_str() != "IN" {
+                wrb_debug!("RR class is not 'IN': '{}'", &rec_txt);
+                error_reasons.push(format!("Invalid class in record {} of '{}'", i, &rec_txt));
                 continue;
             }
             if rec.rr_type.as_str() != "TXT" {
+                wrb_debug!("RR type is not 'TXT': '{}'", &rec_txt);
+                error_reasons.push(format!("Invalid type in record {} of '{}'", i, &rec_txt));
                 continue;
             }
-            let Ok(wrbrec) = WrbTxtRecord::try_from(rec) else {
+            let Ok(wrbrec) = WrbTxtRecord::try_from(rec)
+                .inspect_err(|e| wrb_warn!("Could not convert RR to WRB TXT record: {:?}", &e))
+            else {
+                wrb_debug!(
+                    "Could not convert parsed record into WrbTxtRecord: '{}'",
+                    &rec_txt
+                );
+                error_reasons.push(format!("Invalid payload in record {} '{}'", i, &rec_txt));
                 continue;
             };
 
             let WrbTxtRecord::V1(wrbrec) = wrbrec;
 
-            // query this replica's signers
-            let signers = self.get_stackerdb_signers(&wrbrec.contract_id)?;
+            // query this replica's signers from the home node
+            let mut home_client = home_connector(&wrbrec.contract_id, &home_node_addr)?;
+            let signers = home_client.get_signers()?;
 
             // make sure the wrb txt record is consistent with the current signers
             if wrbrec.slot_metadata.slot_id >= u32::try_from(signers.len()).unwrap_or(u32::MAX) {
@@ -393,6 +481,13 @@ impl Runner {
                     wrbrec.slot_metadata.slot_id,
                     signers.len()
                 );
+                error_reasons.push(format!(
+                    "Slot {} exceeds number of signers ({}) in record {} '{}'",
+                    wrbrec.slot_metadata.slot_id,
+                    signers.len(),
+                    i,
+                    &rec_txt
+                ));
                 continue;
             }
 
@@ -403,6 +498,10 @@ impl Runner {
                     "No such WRB signer for slot {}",
                     wrbrec.slot_metadata.slot_id
                 );
+                error_reasons.push(format!(
+                    "No such signer for slot {} in record {} '{}'",
+                    wrbrec.slot_metadata.slot_id, i, &rec_txt
+                ));
                 continue;
             };
 
@@ -413,34 +512,89 @@ impl Runner {
                     signer_addr,
                     &e
                 );
+                error_reasons.push(format!(
+                    "Failed to authenticate slot {} with {} in record {} '{}'",
+                    wrbrec.slot_metadata.slot_id, &signer_addr, i, &rec_txt
+                ));
                 continue;
             }
 
-            match self.wrbsite_load_from_zonefile_rec(wrbrec) {
-                Ok(Some(wrbsite_bytes)) => {
-                    return Ok(Some(wrbsite_bytes));
-                }
-                Ok(None) => {
-                    // not found
-                    wrb_debug!("Skip WRB record {}", &rec_txt);
+            // find nodes that replicate this stackerdb
+            let replicas = home_client.find_replicas()?;
+            if replicas.len() == 0 {
+                wrb_warn!("No replicas found for StackerDB {}", &wrbrec.contract_id);
+                error_reasons.push(format!(
+                    "No replicas found for StackerDB {} in record {} '{}'",
+                    &wrbrec.contract_id, i, &rec_txt
+                ));
+                continue;
+            }
+            for replica_addr in replicas.iter() {
+                let Ok(mut replica_client) = replica_connector(&wrbrec.contract_id, replica_addr)
+                    .inspect_err(|e| {
+                        wrb_warn!(
+                            "Failed to connect to replica {} of {}: {:?}",
+                            replica_addr,
+                            &wrbrec.contract_id,
+                            &e
+                        );
+                        error_reasons.push(format!(
+                            "Failed to connect to replica {} of {} in record {} '{}': {:?}",
+                            replica_addr, &wrbrec.contract_id, i, &rec_txt, &e
+                        ));
+                    })
+                else {
                     continue;
-                }
-                Err(e) => {
-                    wrb_warn!("Failed to load WRB site: {:?}", &e);
-                    continue;
+                };
+
+                match Self::wrbsite_load_from_zonefile_rec(&wrbrec, &mut *replica_client) {
+                    Ok(Some(wrbsite_bytes)) => {
+                        return Ok(Some(wrbsite_bytes));
+                    }
+                    Ok(None) => {
+                        // not found
+                        wrb_debug!("Skip WRB record {}", &rec_txt);
+                        error_reasons.push(format!("Failed to load wrbsite from zonefile record {} '{}' for replica {} at {}", i, &rec_txt, &wrbrec.contract_id, replica_addr));
+                        continue;
+                    }
+                    Err(e) => {
+                        wrb_warn!(
+                            "Failed to load WRB site for StackerDB {} from {}: {:?}",
+                            &wrbrec.contract_id,
+                            replica_addr,
+                            &e
+                        );
+                        error_reasons.push(format!("Failed to load wrbsite from zonefile record {} '{}' for replica {} at {}: {:?}", i, &rec_txt, &wrbrec.contract_id, replica_addr, &e));
+                        continue;
+                    }
                 }
             }
         }
-        return Err(Error::FailedToRun("Failed to resolve WRB site".into()));
+        return Err(Error::FailedToRun(
+            "Failed to resolve WRB site".into(),
+            error_reasons,
+        ));
     }
 
-    /// Load a wrbsite, given the BNS name
-    pub fn wrbsite_load(
+    /// Load a wrbsite, given the BNS name.
+    pub fn wrbsite_load_ext<F, G>(
         &mut self,
         bns_resolver: &mut dyn BNSResolver,
         name: &str,
         namespace: &str,
-    ) -> Result<Option<Vec<u8>>, Error> {
+        home_connector: F,
+        replica_connector: G,
+    ) -> Result<Option<Vec<u8>>, Error>
+    where
+        F: FnMut(
+            &QualifiedContractIdentifier,
+            &SocketAddr,
+        ) -> Result<Box<dyn StackerDBClient>, Error>,
+        G: FnMut(
+            &QualifiedContractIdentifier,
+            &SocketAddr,
+        ) -> Result<Box<dyn StackerDBClient>, Error>,
+    {
         let bns_rec = match bns_resolver.lookup(self, name, namespace) {
             Ok(Ok(rec)) => rec,
             Ok(Err(bns_e)) => {
@@ -452,6 +606,10 @@ impl Runner {
                 );
                 return Err(Error::FailedToRun(
                     "Failed to resolve name to zonefile".into(),
+                    vec![format!(
+                        "Failed to resolve '{}.{}' to zonefile due to contract error: {:?}",
+                        name, namespace, &bns_e
+                    )],
                 ));
             }
             Err(e) => {
@@ -461,14 +619,39 @@ impl Runner {
                     namespace,
                     &e
                 );
-                return Err(e);
+                return Err(Error::FailedToRun(
+                    "Failed to resolve '{}.{}' to zonefile due to error".into(),
+                    vec![format!("Lookup failed: {:?}", &e)],
+                ));
             }
         };
         let Some(zonefile) = bns_rec.zonefile else {
             wrb_warn!("Name '{}.{}' has no zonefile", name, namespace);
-            return Err(Error::FailedToRun("Name has no zonefile".into()));
+            return Err(Error::FailedToRun("Name has no zonefile".into(), vec![]));
         };
 
-        self.wrbsite_load_from_zonefile(zonefile)
+        self.wrbsite_load_from_zonefile(zonefile, home_connector, replica_connector)
+    }
+
+    /// Helper method to load a wrbsite, given a BNS name
+    pub fn wrbsite_load(
+        &mut self,
+        bns_resolver: &mut dyn BNSResolver,
+        name: &str,
+        namespace: &str,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        self.wrbsite_load_ext(
+            bns_resolver,
+            name,
+            namespace,
+            |contract_id: &QualifiedContractIdentifier, node_addr: &SocketAddr| {
+                let session = StackerDBSession::new(node_addr.clone(), contract_id.clone());
+                Ok(Box::new(session))
+            },
+            |contract_id: &QualifiedContractIdentifier, node_addr: &SocketAddr| {
+                let session = StackerDBSession::new(node_addr.clone(), contract_id.clone());
+                Ok(Box::new(session))
+            },
+        )
     }
 }

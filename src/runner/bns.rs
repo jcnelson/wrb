@@ -41,6 +41,12 @@ pub struct BNSNameRecord {
     pub zonefile: Option<Vec<u8>>,
 }
 
+impl BNSNameRecord {
+    pub fn empty() -> Self {
+        Self { zonefile: None }
+    }
+}
+
 impl TryFrom<ResponseData> for BNSNameRecord {
     type Error = Error;
     fn try_from(v_ok: ResponseData) -> Result<Self, Error> {
@@ -111,10 +117,10 @@ impl BNSResolver for NodeBNSResolver {
     fn lookup(
         &mut self,
         runner: &mut Runner,
-        namespace: &str,
         name: &str,
+        namespace: &str,
     ) -> Result<Result<BNSNameRecord, BNSError>, Error> {
-        runner.bns_lookup(namespace, name)
+        runner.bns_lookup(name, namespace)
     }
 }
 
@@ -123,8 +129,8 @@ impl Runner {
     /// Must be from the `zonefile-resolver` contract in BNSv2
     pub fn bns_lookup(
         &mut self,
-        namespace: &str,
         name: &str,
+        namespace: &str,
     ) -> Result<Result<BNSNameRecord, BNSError>, Error> {
         let bns_contract = self.bns_contract_id.clone();
         let v = self.call_readonly(
@@ -141,7 +147,11 @@ impl Runner {
         if v_res.committed {
             return Ok(Ok(BNSNameRecord::try_from(v_res)?));
         } else {
-            return Ok(Err(BNSError::try_from(v_res)?));
+            let bns_err = BNSError::try_from(v_res)?;
+            if let BNSError::NoZonefileFound = bns_err {
+                return Ok(Ok(BNSNameRecord::empty()));
+            }
+            return Ok(Err(bns_err));
         }
     }
 }

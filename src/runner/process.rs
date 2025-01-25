@@ -67,7 +67,7 @@ impl Runner {
         &self,
         bin_fullpath: &str,
         args: &[&str],
-        stdin: Option<String>,
+        _stdin: Option<String>,
     ) -> Result<(i32, Vec<u8>, Vec<u8>), Error> {
         let full_args = fmt_bin_args(bin_fullpath, args);
         wrb_debug!("Run: `{}`", &full_args);
@@ -79,7 +79,7 @@ impl Runner {
             .spawn()
             .map_err(|e| {
                 wrb_warn!("Failed to run '{}': {:?}", &full_args, &e);
-                Error::FailedToRun(full_args.clone())
+                Error::FailedToRun(full_args.clone(), vec![])
             })?;
 
         let output = cmd
