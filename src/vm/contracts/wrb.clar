@@ -12,7 +12,16 @@
 (define-constant WRB_EVENT_RESIZE u2)
 (define-constant WRB_EVENT_OPEN u3)
 
+;; Error codes
+(define-constant WRB_ERR_INFALLIBLE u0)
+(define-constant WRB_ERR_INVALID u1)
+(define-constant WRB_ERR_EXISTS u2)
+
 (define-constant UPPER_u128 u170141183460469231731687303715884105728)
+
+;; Get the app name
+(define-read-only (get-app-name)
+    (contract-call? .wrb-ll get-app-name))
 
 ;; Call a read-only function 
 (define-public (call-readonly (contract principal) (function-name (string-ascii 128)) (function-args-list (buff 102400)))
@@ -25,6 +34,12 @@
    (begin
        (unwrap-panic (contract-call? .wrb-ll buff-to-string-utf8 arg))
        (contract-call? .wrb-ll get-last-wrb-buff-to-string-utf8)))
+
+;; Tries to converts a string-ascii to a string-utf8
+(define-public (string-ascii-to-string-utf8 (arg (string-ascii 25600)))
+   (begin
+       (unwrap-panic (contract-call? .wrb-ll string-ascii-to-string-utf8 arg))
+       (contract-call? .wrb-ll get-last-wrb-string-ascii-to-string-utf8)))
 
 (define-data-var wrb-root-size { cols: uint, rows: uint } { cols: u0, rows: u0 })
 
@@ -52,22 +67,22 @@
 
 (define-data-var last-viewport-id (optional uint) none)
 
-(define-private (ascii-512 (str (string-ascii 512)))
-    (unwrap-panic (as-max-len? str u512)))
+(define-private (err-ascii-512 (code uint) (str (string-ascii 512)))
+    { code: code, message: (unwrap-panic (as-max-len? str u512)) })
 
 (define-private (check-dims (start-row uint) (start-col uint) (num-rows uint) (num-cols uint))
     (begin
-       (asserts! (< start-col u65536) (err (ascii-512 "start-col too big")))
-       (asserts! (< start-row u65536) (err (ascii-512 "start-row too big")))
-       (asserts! (< (+ start-col num-cols) u65536) (err (ascii-512 "num-cols too big")))
-       (asserts! (< (+ start-row num-rows) u65536) (err (ascii-512 "num-rows too big")))
+       (asserts! (< start-col u65536) (err (err-ascii-512 WRB_ERR_INVALID "start-col too big")))
+       (asserts! (< start-row u65536) (err (err-ascii-512 WRB_ERR_INVALID "start-row too big")))
+       (asserts! (< (+ start-col num-cols) u65536) (err (err-ascii-512 WRB_ERR_INVALID "num-cols too big")))
+       (asserts! (< (+ start-row num-rows) u65536) (err (err-ascii-512 WRB_ERR_INVALID "num-rows too big")))
        (ok true)))
      
 ;; Add a root-level viewport 
 (define-public (wrb-viewport (id uint) (start-row uint) (start-col uint) (num-rows uint) (num-cols uint))
    (begin
         (try! (check-dims start-row start-col num-rows num-cols))
-        (asserts! (is-none (map-get? viewports id)) (err (ascii-512 "viewport already exists")))
+        (asserts! (is-none (map-get? viewports id)) (err (err-ascii-512 WRB_ERR_EXISTS "viewport already exists")))
         (map-set viewports
             id
             {
@@ -86,8 +101,8 @@
 (define-public (wrb-child-viewport (id uint) (parent-id uint) (start-row uint) (start-col uint) (num-rows uint) (num-cols uint))
    (begin
         (try! (check-dims start-row start-col num-rows num-cols))
-        (asserts! (is-none (map-get? viewports id)) (err (ascii-512 "viewport already exists")))
-        (asserts! (is-some (map-get? viewports parent-id)) (err (ascii-512 "parent viewport does not exist")))
+        (asserts! (is-none (map-get? viewports id)) (err (err-ascii-512 WRB_ERR_EXISTS "viewport already exists")))
+        (asserts! (is-some (map-get? viewports parent-id)) (err (err-ascii-512 WRB_ERR_EXISTS "parent viewport does not exist")))
         (map-set viewports
             id
             {
@@ -296,7 +311,7 @@
    (var-set wrb-ui-list-len (+ u1 ui-list-len))
    (if true
        (ok true)
-       (err (ascii-512 "infallible")))
+       (err (err-ascii-512 WRB_ERR_INFALLIBLE "infallible")))
 ))
 
 ;; Print static text to a viewport, with wordwrap.
@@ -318,7 +333,7 @@
    (var-set wrb-ui-list-len (+ u1 ui-list-len))
    (if true
        (ok true)
-       (err (ascii-512 "infallible")))
+       (err (err-ascii-512 WRB_ERR_INFALLIBLE "infallible")))
 ))
 
 ;; Print static text to a viewport, with wordwrap and newline
@@ -340,7 +355,7 @@
    (var-set wrb-ui-list-len (+ u1 ui-list-len))
    (if true
        (ok true)
-       (err (ascii-512 "infallible")))
+       (err (err-ascii-512 WRB_ERR_INFALLIBLE "infallible")))
 ))
 
 ;; Print dynamic text to a viewport
@@ -364,7 +379,7 @@
    (map-set wrb-dynamic-ui-list-end id (+ u1 viewport-dynamic-ui-list-end))
    (if true
        (ok true)
-       (err (ascii-512 "infallible")))))
+       (err (err-ascii-512 WRB_ERR_INFALLIBLE "infallible")))))
 
 ;; Print dynamic text to a viewport, with wordwrap.
 (define-public (wrb-viewport-print (id uint) (cursor (optional { col: uint, row: uint })) (bg-color uint) (fg-color uint) (text (string-utf8 12800)))
@@ -387,7 +402,7 @@
    (map-set wrb-dynamic-ui-list-end id (+ u1 viewport-dynamic-ui-list-end))
    (if true
        (ok true)
-       (err (ascii-512 "infallible")))))
+       (err (err-ascii-512 WRB_ERR_INFALLIBLE "infallible")))))
 
 ;; Print dynamic text to a viewport, with wordwrap and newline.
 (define-public (wrb-viewport-println (id uint) (cursor (optional { col: uint, row: uint })) (bg-color uint) (fg-color uint) (text (string-utf8 12800)))
@@ -410,7 +425,7 @@
    (map-set wrb-dynamic-ui-list-end id (+ u1 viewport-dynamic-ui-list-end))
    (if true
        (ok true)
-       (err (ascii-512 "infallible")))))
+       (err (err-ascii-512 WRB_ERR_INFALLIBLE "infallible")))))
 
 ;; Clear a viewport of text
 (define-public (wrb-viewport-clear (id uint))
@@ -420,7 +435,7 @@
    (map-set wrb-dynamic-ui-list-start id list-len)
    (if true
        (ok true)
-       (err (ascii-512 "infallible")))))
+       (err (err-ascii-512 WRB_ERR_INFALLIBLE "infallible")))))
 
 ;; Default button style
 (define-data-var wrb-default-button-colors { fg: uint, bg: uint } { fg: u0, bg: u16776960 })
@@ -625,10 +640,16 @@
 (define-read-only (wrb-dynamic-ui-get-print-element (ui-index uint))
     (map-get? dynamic-viewport-print-list ui-index))
 
-;; Open a wrbpod. Creates a session for it and returns the session ID (as a uint)
-(define-public (wrbpod-open (stackerdb-contract principal))
+;; Get the address of the user's configured wrbpod
+(define-public (wrbpod-default)
     (begin
-        (try! (contract-call? .wrb-ll wrbpod-open stackerdb-contract))
+        (try! (contract-call? .wrb-ll wrbpod-default))
+        (contract-call? .wrb-ll get-last-wrbpod-default)))
+
+;; Open a wrbpod. Creates a session for it and returns the session ID (as a uint)
+(define-public (wrbpod-open (superblock { contract: principal, slot: uint }))
+    (begin
+        (try! (contract-call? .wrb-ll wrbpod-open superblock))
         (contract-call? .wrb-ll get-last-wrbpod-open-result)))
 
 ;; How many slots are allocated to this app in the wrbpod?

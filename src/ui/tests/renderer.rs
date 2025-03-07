@@ -41,12 +41,9 @@ impl Renderer {
         let code_hash = Hash160::from_data(code.as_bytes());
         let mut wrb_tx = vm.begin_page_load(&code_hash).unwrap();
 
-        let mainnet = wrb_tx.mainnet();
-
         let mut db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
         db.begin();
-        let mut vm_env =
-            OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+        let mut vm_env = OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
 
         let values_res = self.run_query_code(&mut vm_env, &main_code_id, code);
 
@@ -64,7 +61,6 @@ fn test_render_codec() {
     core::init(true, "localhost", 20443);
 
     let txt = "hello world!";
-    let renderer = Renderer::new(1024);
     let bytes = Renderer::encode_bytes(txt.as_bytes()).unwrap();
 
     let mut bytes_decoded = vec![];
@@ -153,12 +149,12 @@ fn test_render_viewports_raw_text() {
 "#;
     let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
 
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
+    let mut vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_string(&mut vm, &bytes).unwrap();
     println!("{}", &s);
 
-    let mut vm = ClarityVM::new(db_path, "foo-test.btc").unwrap();
+    let mut vm = ClarityVM::new(db_path, "foo-test.btc", 1).unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
     println!("{}", &s);
@@ -194,12 +190,12 @@ fn test_render_viewports_wrapped_text() {
 
     let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
 
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
+    let mut vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_string(&mut vm, &bytes).unwrap();
     println!("====== output ======\n{}\n====== end output ======", &s);
 
-    let mut vm = ClarityVM::new(db_path, "foo-test.btc").unwrap();
+    let mut vm = ClarityVM::new(db_path, "foo-test.btc", 1).unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
 
@@ -289,12 +285,12 @@ fn test_render_viewport_buttons() {
 "#;
     let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
 
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
+    let mut vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_string(&mut vm, &bytes).unwrap();
     println!("{}", &s);
 
-    let mut vm = ClarityVM::new(db_path, "foo-test.btc").unwrap();
+    let mut vm = ClarityVM::new(db_path, "foo-test.btc", 1).unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
     assert_eq!(
@@ -331,12 +327,12 @@ fn test_render_viewport_checkbox() {
 "#;
     let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
 
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
+    let mut vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_string(&mut vm, &bytes).unwrap();
     println!("{}", &s);
 
-    let mut vm = ClarityVM::new(db_path, "foo-test.btc").unwrap();
+    let mut vm = ClarityVM::new(db_path, "foo-test.btc", 1).unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
 

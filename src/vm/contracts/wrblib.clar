@@ -7,11 +7,21 @@
 (define-constant WRB_EVENT_RESIZE u2)
 (define-constant WRB_EVENT_OPEN u3)
 
+;; get the app name and version
+(define-private (wrb-get-app-name)
+    (contract-call? 'SP000000000000000000002Q6VF78.wrb get-app-name))
+
+;; read-only call to the node
 (define-private (wrb-call-readonly? (contract principal) (function-name (string-ascii 128)) (function-args-list (buff 102400)))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb call-readonly contract function-name function-args-list))
 
+;; buff to utf8 string
 (define-private (wrb-buff-to-string-utf8? (arg (buff 102400)))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb buff-to-string-utf8 arg))
+
+;; ascii string to utf8 string
+(define-private (wrb-string-ascii-to-string-utf8? (arg (string-ascii 25600)))
+    (contract-call? 'SP000000000000000000002Q6VF78.wrb string-ascii-to-string-utf8 arg))
 
 ;; Define the size of the root viewport in rows and columns
 (define-private (wrb-root (cols uint) (rows uint))
@@ -132,17 +142,21 @@
 (define-read-only (wrb-dynamic-ui-get-print-element (ui-index uint))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-dynamic-ui-get-print-element ui-index))
 
+;; Get the address of the user's wrbpod
+(define-private (wrbpod-default)
+    (unwrap-panic (contract-call? 'SP000000000000000000002Q6VF78.wrb wrbpod-default)))
+
 ;; Open a connection to a wrbpod
-(define-private (wrbpod-open (stackerdb-contract principal))
-    (contract-call? 'SP000000000000000000002Q6VF78.wrb wrbpod-open stackerdb-contract))
+(define-private (wrbpod-open (superblock { contract: principal, slot: uint }))
+    (contract-call? 'SP000000000000000000002Q6VF78.wrb wrbpod-open superblock))
 
 ;; Get the number of slots that the app owns.
-;; Returns (response uint (string-ascii 512))
+;; Returns (response uint { code: uint, message: (string-ascii 512) })
 (define-public (wrbpod-get-num-slots (session-id uint) (app-name { name: (buff 48), namespace: (buff 20) }))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb wrbpod-get-num-slots session-id app-name))
 
 ;; Allocate slots in a wrbpod that the user owns
-;; Returns (response bool (string-ascii 512)), where
+;; Returns (response bool { code: uint, message: (string-ascii 512) }), where
 ;; (ok true) indicates successful allocation and
 ;; (ok false) indicates a failure to allocate.
 (define-private (wrbpod-alloc-slots (session-id uint) (num-slots uint))
@@ -154,7 +168,7 @@
 ;; The slot cannot be directly edited; instead, the app uses
 ;; the (wrbpod-get-slice) and (wrbpod-put-slice) functions to 
 ;; load and store indexed bytestrings within the slot, respectively.
-;; Returns (response { version: uint, signer: principal } (string-ascii 512))
+;; Returns (response { version: uint, signer: principal } { code: uint, message: (string-ascii 512)})
 (define-private (wrbpod-fetch-slot (session-id uint) (slot-id uint))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb wrbpod-fetch-slot session-id slot-id))
 

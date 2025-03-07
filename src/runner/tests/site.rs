@@ -179,7 +179,7 @@ fn test_dns_wrb_txt_codec() {
         ZonefileResourceRecord::try_from(wrbrec.clone())
             .unwrap()
             .to_string(),
-        format!("wrb\t\tIN\tTXT\t\"{}\" ", &b64)
+        format!("wrb\t\tIN\tTXT\t\"{}\"", &b64)
     );
 }
 
@@ -292,6 +292,8 @@ fn test_wrbsite_load_from_zonefile() {
     mock_stackerdb.put_chunk(chunk).unwrap();
 
     let mut runner = Runner::new(
+        QualifiedContractIdentifier::parse("SP2QEZ06AGJ3RKJPBV14SY1V5BBFNAW33D96YPGZF.BNS-V2")
+            .unwrap(),
         QualifiedContractIdentifier::parse(
             "SP2QEZ06AGJ3RKJPBV14SY1V5BBFNAW33D96YPGZF.zonefile-resolver",
         )
@@ -309,14 +311,16 @@ fn test_wrbsite_load_from_zonefile() {
         slot_metadata,
     };
 
-    let bytes = runner
+    let (bytes, ver) = runner
         .wrbsite_load_from_zonefile(
             wrbrec_to_zonefile(wrbrec),
             |_, _| Ok(Box::new(mock_stackerdb.clone())),
             |_, _| Ok(Box::new(mock_stackerdb.clone())),
         )
+        .unwrap()
         .unwrap();
-    assert_eq!(bytes.unwrap(), code_bytes);
+    assert_eq!(bytes, code_bytes);
+    assert_eq!(ver, 2);
 
     // sad path -- no such chunk
     let bad_slot_metadata = SlotMetadata::new_unsigned(0, 2, code_hash.clone());
@@ -458,6 +462,8 @@ fn test_wrbsite_load_ext() {
     );
 
     let mut runner = Runner::new(
+        QualifiedContractIdentifier::parse("SP2QEZ06AGJ3RKJPBV14SY1V5BBFNAW33D96YPGZF.BNS-V2")
+            .unwrap(),
         QualifiedContractIdentifier::parse(
             "SP2QEZ06AGJ3RKJPBV14SY1V5BBFNAW33D96YPGZF.zonefile-resolver",
         )
@@ -467,7 +473,7 @@ fn test_wrbsite_load_ext() {
     );
 
     // happy path
-    let resolved_code = runner
+    let (resolved_code, ver) = runner
         .wrbsite_load_ext(
             &mut mock_bns_resolver,
             "happy",
@@ -479,6 +485,7 @@ fn test_wrbsite_load_ext() {
         .unwrap();
 
     assert_eq!(resolved_code, code_bytes);
+    assert_eq!(ver, 2);
 
     // sad path -- empty chunk
     let err = runner

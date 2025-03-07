@@ -51,11 +51,13 @@ fn fmt_bin_args(bin: &str, args: &[&str]) -> String {
 impl Runner {
     pub fn new(
         bns_contract_id: QualifiedContractIdentifier,
+        zonefile_contract_id: QualifiedContractIdentifier,
         node_host: String,
         node_port: u16,
     ) -> Runner {
         Runner {
             bns_contract_id,
+            zonefile_contract_id,
             node_host,
             node_port,
             node: None,

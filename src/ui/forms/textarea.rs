@@ -428,10 +428,12 @@ impl GapBuffer {
         iter
     }
 
-    pub fn to_string(&self, num_cols: usize) -> String {
+    pub fn to_string(&self) -> String {
         let mut ret = String::new();
-        for c in self.iter(0, num_cols) {
-            ret.push(c);
+        for i in 0..self.len() {
+            if let Some(c) = self.get(i) {
+                ret.push(c);
+            }
         }
         ret
     }
@@ -764,8 +766,8 @@ impl TextArea {
         }
     }
 
-    pub fn text(&self, num_cols: usize) -> String {
-        self.inner_text.to_string(num_cols)
+    pub fn text(&self) -> String {
+        self.inner_text.to_string()
     }
 
     pub fn set_text(&mut self, txt: String) {
@@ -924,8 +926,14 @@ impl WrbForm for TextArea {
     }
 
     fn to_clarity_value(&self) -> Result<Option<Value>, Error> {
-        // TODO
-        Ok(None)
+        let value_opt = Value::string_utf8_from_string_utf8_literal(self.inner_text.to_string())
+            .map_err(|e| {
+                wrb_warn!("Failed to convert inner text of textarea element {} in viewport {} into a Clarity value: {:?}", self.element_id, self.viewport_id, &e);
+                e
+            })
+            .ok();
+
+        Ok(value_opt)
     }
 
     fn render(&mut self, root: &mut Root, _cursor: (u64, u64)) -> Result<(u64, u64), Error> {

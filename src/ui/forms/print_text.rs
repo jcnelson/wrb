@@ -130,6 +130,7 @@ impl WrbForm for PrintText {
         })
     }
 
+    /// No state to store for static text
     fn to_clarity_value(&self) -> Result<Option<Value>, Error> {
         Ok(None)
     }

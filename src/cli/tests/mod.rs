@@ -1,6 +1,6 @@
 // Copyright (C) 2013-2020 Blockstack PBC, a public benefit corporation
-// Copyright (C) 2020-2022 Stacks Open Internet Foundation
-// Copyright (C) 2022 Jude Nelson
+// Copyright (C) 2020-2025 Stacks Open Internet Foundation
+// Copyright (C) 2025 Jude Nelson
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -15,15 +15,5 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use crate::vm::ClarityVM;
-use std::fs;
-
-#[test]
-fn test_vm_bootup() {
-    let db_path = "/tmp/wrb-clarity-vm-test-bootup";
-    if fs::metadata(&db_path).is_ok() {
-        fs::remove_dir_all(&db_path).unwrap();
-    }
-
-    let _ = ClarityVM::new(db_path, "foo.btc", 0);
-}
+pub mod clar;
+pub mod wrbpod;

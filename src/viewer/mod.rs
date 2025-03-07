@@ -239,6 +239,13 @@ impl Viewer {
                             self.update_focused_cursor(frame, stdout)?;
                         }
                     }
+                    Key::BackTab => {
+                        self.focus = ViewerFocus::Root;
+                        if let Some(frame) = frame.as_mut() {
+                            frame.prev_focus()?;
+                            self.update_focused_cursor(frame, stdout)?;
+                        }
+                    }
                     Key::Char('\n') => {
                         self.focus = ViewerFocus::Root;
                     }
@@ -259,6 +266,13 @@ impl Viewer {
                         self.update_focused_cursor(frame, stdout)?;
                     }
                 }
+                Key::BackTab => {
+                    self.focus = ViewerFocus::Root;
+                    if let Some(frame) = frame.as_mut() {
+                        frame.prev_focus()?;
+                        self.update_focused_cursor(frame, stdout)?;
+                    }
+                }
                 _ => {
                     self.status.handle_event(WrbFormEvent::Keypress(key))?;
                     self.set_status_focus(stdout)?;
@@ -275,6 +289,12 @@ impl Viewer {
                 Key::Char('\t') => {
                     if let Some(frame) = frame.as_mut() {
                         frame.next_focus()?;
+                        self.update_focused_cursor(frame, stdout)?;
+                    }
+                }
+                Key::BackTab => {
+                    if let Some(frame) = frame.as_mut() {
+                        frame.prev_focus()?;
                         self.update_focused_cursor(frame, stdout)?;
                     }
                 }

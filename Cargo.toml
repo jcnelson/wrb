@@ -16,6 +16,8 @@ serde_derive = "1"
 lazy_static = "1.4"
 termion = "3.0.0"
 toml = "0.8.12"
+url = "2.5.4"
+regex = "1.11.1"
 base64ct = { version = "1.6.0", features = ["alloc"] }
 
 [patch.crates-io]
@@ -28,3 +30,9 @@ features = ["arbitrary_precision", "unbounded_depth"]
 [dependencies.rusqlite]
 version = "=0.31.0"
 features = ["blob", "serde_json", "i128_blob", "bundled", "trace"]
+
+[target.'cfg(all(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64"), not(any(target_os="windows"))))'.dependencies]
+sha2 = { version = "0.10", features = ["asm"] }
+
+[target.'cfg(any(not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")), any(target_os="windows")))'.dependencies]
+sha2 = { version = "0.10" }

@@ -29,17 +29,22 @@ use crate::runner::http::run_http_request;
 use clarity::vm::types::QualifiedContractIdentifier;
 use clarity::vm::Value;
 
+use stacks_common::types::chainstate::BurnchainHeaderHash;
+use stacks_common::types::chainstate::SortitionId;
 use stacks_common::types::chainstate::StacksAddress;
 use stacks_common::types::chainstate::{BlockHeaderHash, ConsensusHash, StacksBlockId};
 use stacks_common::types::net::PeerAddress;
 use stacks_common::types::StacksPublicKeyBuffer;
 use stacks_common::util::hash::{hex_bytes, Hash160, Sha256Sum};
+use stacks_common::util::HexError;
 
 use serde::Deserialize;
 use serde::Serialize;
 
 use clarity::vm::errors::Error as clarity_error;
 use clarity::vm::errors::InterpreterError as clarity_interpreter_error;
+
+use crate::net::NeighborAddress;
 
 pub mod bns;
 pub mod http;
@@ -50,16 +55,6 @@ pub mod tx;
 
 #[cfg(test)]
 pub mod tests;
-
-/// A descriptor of a peer
-/// Cribbed from the Stacks blockchain (https://github.com/stacks-network/stacks-core)
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct NeighborAddress {
-    #[serde(rename = "ip")]
-    pub addrbytes: PeerAddress,
-    pub port: u16,
-    pub public_key_hash: Hash160, // used as a hint; useful for when a node trusts another node to be honest about this
-}
 
 /// The response to GET /v2/info, omitting things like the anchor block and affirmation maps (since
 /// we don't have the structs for them available in stacks_common).
@@ -90,6 +85,57 @@ pub struct RPCPeerInfoData {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stackerdbs: Option<Vec<String>>,
+}
+
+/// Struct for sortition information returned via the GetSortition API call
+#[derive(PartialEq, Debug, Clone, Serialize, Deserialize)]
+pub struct RPCSortitionInfo {
+    /// The burnchain header hash of the block that triggered this event.
+    #[serde(with = "prefix_hex")]
+    pub burn_block_hash: BurnchainHeaderHash,
+    /// The burn height of the block that triggered this event.
+    pub burn_block_height: u64,
+    /// The burn block time of the sortition
+    pub burn_header_timestamp: u64,
+    /// This sortition ID of the block that triggered this event. This incorporates
+    ///  PoX forking information and the burn block hash to obtain an identifier that is
+    ///  unique across PoX forks and burnchain forks.
+    #[serde(with = "prefix_hex")]
+    pub sortition_id: SortitionId,
+    /// The parent of this burn block's Sortition ID
+    #[serde(with = "prefix_hex")]
+    pub parent_sortition_id: SortitionId,
+    /// The consensus hash of the block that triggered this event. This incorporates
+    ///  PoX forking information and burn op information to obtain an identifier that is
+    ///  unique across PoX forks and burnchain forks.
+    #[serde(with = "prefix_hex")]
+    pub consensus_hash: ConsensusHash,
+    /// Boolean indicating whether or not there was a succesful sortition (i.e. a winning
+    ///  block or miner was chosen).
+    ///
+    /// This will *also* be true if this sortition corresponds to a shadow block.  This is because
+    /// the signer does not distinguish between shadow blocks and blocks with sortitions, so until
+    /// we can update the signer and this interface, we'll have to report the presence of a shadow
+    /// block tenure in a way that the signer currently understands.
+    pub was_sortition: bool,
+    /// If sortition occurred, and the miner's VRF key registration
+    ///  associated a nakamoto mining pubkey with their commit, this
+    ///  will contain the Hash160 of that mining key.
+    #[serde(with = "prefix_opt_hex")]
+    pub miner_pk_hash160: Option<Hash160>,
+    /// If sortition occurred, this will be the consensus hash of the burn block corresponding
+    /// to the winning block commit's parent block ptr. In 3.x, this is the consensus hash of
+    /// the tenure that this new burn block's miner will be building off of.
+    #[serde(with = "prefix_opt_hex")]
+    pub stacks_parent_ch: Option<ConsensusHash>,
+    /// If sortition occurred, this will be the consensus hash of the most recent sortition before
+    ///  this one.
+    #[serde(with = "prefix_opt_hex")]
+    pub last_sortition_ch: Option<ConsensusHash>,
+    #[serde(with = "prefix_opt_hex")]
+    /// In Stacks 2.x, this is the winning block.
+    /// In Stacks 3.x, this is the first block of the parent tenure.
+    pub committed_block_hash: Option<BlockHeaderHash>,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +235,7 @@ impl From<clarity_interpreter_error> for Error {
 
 pub struct Runner {
     bns_contract_id: QualifiedContractIdentifier,
+    zonefile_contract_id: QualifiedContractIdentifier,
     node_host: String,
     node_port: u16,
     node: Option<SocketAddr>,
@@ -228,6 +275,10 @@ impl Runner {
         self.bns_contract_id.clone()
     }
 
+    pub fn get_zonefile_contract_id(&self) -> QualifiedContractIdentifier {
+        self.zonefile_contract_id.clone()
+    }
+
     /// Run a read-only function call on the node, given a resolved socket address to the node
     pub fn run_call_readonly(
         node_addr: &SocketAddr,
@@ -250,6 +301,13 @@ impl Runner {
         };
         let payload_json = serde_json::to_string(&payload)
             .map_err(|_| Error::RPCError("Could not serialize call-read-only request".into()))?;
+
+        wrb_debug!(
+            "call-readonly {} {}: {}",
+            &contract_id,
+            function_name,
+            &payload_json
+        );
         let bytes = run_http_request(
             &mut sock,
             node_addr,
@@ -261,8 +319,6 @@ impl Runner {
             Some("application/json"),
             payload_json.as_bytes(),
         )?;
-
-        wrb_debug!("call-readonly: {}", &payload_json);
 
         // try to convert into the response
         let response: CallReadOnlyResponse = serde_json::from_slice(&bytes).map_err(|_| {
@@ -315,4 +371,107 @@ impl Runner {
 
         Ok(response)
     }
+
+    /// Get /v3/sortitions/{:key}/{:value}
+    pub fn run_get_sortition_info(
+        node_addr: &SocketAddr,
+        key: &str,
+        value: &str,
+    ) -> Result<Vec<RPCSortitionInfo>, Error> {
+        let mut sock = TcpStream::connect(node_addr)?;
+        let bytes = run_http_request(
+            &mut sock,
+            node_addr,
+            "GET",
+            &format!("/v3/sortitions/{}/{}", key, value),
+            None,
+            &[],
+        )?;
+
+        let response: Vec<RPCSortitionInfo> = serde_json::from_slice(&bytes)
+            .map_err(|_| Error::Deserialize("Failed to decode /v2/info response".into()))?;
+
+        Ok(response)
+    }
 }
+
+/// This module serde encodes and decodes optional byte fields in RPC
+/// responses as Some(String) where the String is a `0x` prefixed
+/// hex string.
+pub mod prefix_opt_hex {
+    pub fn serialize<S: serde::Serializer, T: std::fmt::LowerHex>(
+        val: &Option<T>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        match val {
+            Some(ref some_val) => {
+                let val_str = format!("0x{some_val:x}");
+                s.serialize_some(&val_str)
+            }
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>, T: super::HexDeser>(
+        d: D,
+    ) -> Result<Option<T>, D::Error> {
+        let opt_inst_str: Option<String> = serde::Deserialize::deserialize(d)?;
+        let Some(inst_str) = opt_inst_str else {
+            return Ok(None);
+        };
+        let Some(hex_str) = inst_str.get(2..) else {
+            return Err(serde::de::Error::invalid_length(
+                inst_str.len(),
+                &"at least length 2 string",
+            ));
+        };
+        let val = T::try_from(&hex_str).map_err(serde::de::Error::custom)?;
+        Ok(Some(val))
+    }
+}
+
+/// This module serde encodes and decodes byte fields in RPC
+/// responses as a String where the String is a `0x` prefixed
+/// hex string.
+pub mod prefix_hex {
+    pub fn serialize<S: serde::Serializer, T: std::fmt::LowerHex>(
+        val: &T,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&format!("0x{val:x}"))
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>, T: super::HexDeser>(
+        d: D,
+    ) -> Result<T, D::Error> {
+        let inst_str: String = serde::Deserialize::deserialize(d)?;
+        let Some(hex_str) = inst_str.get(2..) else {
+            return Err(serde::de::Error::invalid_length(
+                inst_str.len(),
+                &"at least length 2 string",
+            ));
+        };
+        T::try_from(&hex_str).map_err(serde::de::Error::custom)
+    }
+}
+
+pub trait HexDeser: Sized {
+    fn try_from(hex: &str) -> Result<Self, HexError>;
+}
+
+macro_rules! impl_hex_deser {
+    ($thing:ident) => {
+        impl HexDeser for $thing {
+            fn try_from(hex: &str) -> Result<Self, HexError> {
+                $thing::from_hex(hex)
+            }
+        }
+    };
+}
+
+impl_hex_deser!(BurnchainHeaderHash);
+impl_hex_deser!(StacksBlockId);
+impl_hex_deser!(SortitionId);
+impl_hex_deser!(ConsensusHash);
+impl_hex_deser!(BlockHeaderHash);
+impl_hex_deser!(Hash160);

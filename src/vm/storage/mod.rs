@@ -107,7 +107,6 @@ pub struct WrbDB {
     domain: String,
     chain_tip: StacksBlockId,
     conn: Connection,
-    mainnet: bool,
     created: bool,
 }
 
@@ -122,8 +121,6 @@ pub struct WritableWrbStore<'a> {
     tx: Transaction<'a>,
     /// Pending writes
     write_buf: WriteBuffer,
-    /// mainet
-    mainnet: bool,
 }
 
 pub struct ReadOnlyWrbStore<'a> {
@@ -133,8 +130,6 @@ pub struct ReadOnlyWrbStore<'a> {
     tip_height: u64,
     /// Connection to the underlying store
     conn: &'a Connection,
-    /// mainet
-    mainnet: bool,
 }
 
 pub struct WrbHeadersDB {

@@ -7,14 +7,21 @@
 (define-constant WRB_EVENT_RESIZE u2)
 (define-constant WRB_EVENT_OPEN u3)
 
+;; get the app name and version
+(define-private (wrb-get-app-name)
+    (contract-call? 'SP000000000000000000002Q6VF78.wrb get-app-name))
+
+;; read-only call to the node
 (define-private (wrb-call-readonly? (contract principal) (function-name (string-ascii 128)) (function-args-list (buff 102400)))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb call-readonly contract function-name function-args-list))
 
-(define-private (wrb-get-attachment? (attachment-hash (buff 20)))
-    (contract-call? 'SP000000000000000000002Q6VF78.wrb get-attachment attachment-hash))
-
+;; buff to utf8 string
 (define-private (wrb-buff-to-string-utf8? (arg (buff 102400)))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb buff-to-string-utf8 arg))
+
+;; ascii string to utf8 string
+(define-private (wrb-string-ascii-to-string-utf8? (arg (string-ascii 25600)))
+    (contract-call? 'SP000000000000000000002Q6VF78.wrb string-ascii-to-string-utf8 arg))
 
 ;; Define the size of the root viewport in rows and columns
 (define-private (wrb-root (cols uint) (rows uint))
@@ -73,6 +80,16 @@
 (define-private (wrb-checkbox (id uint) (row uint) (col uint) (options (list 256 { text: (string-utf8 200), selected: bool })))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-viewport-add-checkbox id row col options))
 
+;; Add a textline to the viewport.
+;; Returns its UI element ID.
+(define-private (wrb-textline (id uint) (row uint) (col uint) (max-len uint) (text (string-utf8 12800)))
+    (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-viewport-add-textline id row col max-len text))
+
+;; Add a textarea to the viewport.
+;; Returns its UI element ID.
+(define-private (wrb-textarea (id uint) (row uint) (col uint) (num-rows uint) (num-cols uint) (max-len uint) (text (string-utf8 12800)))
+    (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-viewport-add-textarea id row col num-rows num-cols max-len text))
+
 ;; Get the number of UI elements
 (define-read-only (wrb-ui-len)
     (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-ui-len))
@@ -97,6 +114,14 @@
 (define-read-only (wrb-ui-get-checkbox-element (index uint))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-ui-get-checkbox-element index))
 
+;; Get a textline UI element at a particular index
+(define-read-only (wrb-ui-get-textline-element (index uint))
+    (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-ui-get-textline-element index))
+
+;; Get a textarea UI element at a particular index
+(define-read-only (wrb-ui-get-textarea-element (index uint))
+    (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-ui-get-textarea-element index))
+
 ;; Get the minimum dynamic UI index for a viewport
 (define-read-only (wrb-dynamic-ui-index-start (id uint))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-dynamic-ui-index-start id))
@@ -117,17 +142,21 @@
 (define-read-only (wrb-dynamic-ui-get-print-element (ui-index uint))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb wrb-dynamic-ui-get-print-element ui-index))
 
+;; Get the address of the user's wrbpod
+(define-private (wrbpod-default)
+    (unwrap-panic (contract-call? 'SP000000000000000000002Q6VF78.wrb wrbpod-default)))
+
 ;; Open a connection to a wrbpod
 (define-private (wrbpod-open (stackerdb-contract principal))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb wrbpod-open stackerdb-contract))
 
 ;; Get the number of slots that the app owns.
-;; Returns (response uint (string-ascii 512))
+;; Returns (response uint { code: uint, message: (string-ascii 512) })
 (define-public (wrbpod-get-num-slots (session-id uint) (app-name { name: (buff 48), namespace: (buff 20) }))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb wrbpod-get-num-slots session-id app-name))
 
 ;; Allocate slots in a wrbpod that the user owns
-;; Returns (response bool (string-ascii 512)), where
+;; Returns (response bool { code: uint, message: (string-ascii 512) }), where
 ;; (ok true) indicates successful allocation and
 ;; (ok false) indicates a failure to allocate.
 (define-private (wrbpod-alloc-slots (session-id uint) (num-slots uint))
@@ -139,7 +168,7 @@
 ;; The slot cannot be directly edited; instead, the app uses
 ;; the (wrbpod-get-slice) and (wrbpod-put-slice) functions to 
 ;; load and store indexed bytestrings within the slot, respectively.
-;; Returns (response { version: uint, signer: principal } (string-ascii 512))
+;; Returns (response { version: uint, signer: principal } { code: uint, message: (string-ascii 512)})
 (define-private (wrbpod-fetch-slot (session-id uint) (slot-id uint))
     (contract-call? 'SP000000000000000000002Q6VF78.wrb wrbpod-fetch-slot session-id slot-id))
 
@@ -189,12 +218,14 @@
 
 (define-constant VIEWPORT_STATUS u0)
 (define-constant VIEWPORT_WIDGETS u1)
-
+(define-constant VIEWPORT_ERROR u2)
 (define-constant BLACK u0)
-(define-constant WHITE (buff-to-uint-le 0xffffff))
+(define-constant RED (buff-to-uint-be 0xff0000))
+(define-constant WHITE (buff-to-uint-be 0xffffff))
 
 (wrb-viewport VIEWPORT_STATUS u0 u0 u120 u60)
 (wrb-viewport VIEWPORT_WIDGETS u0 u60 u120 u60)
+(wrb-viewport VIEWPORT_ERROR u60 u0 u40 u120)
 
 (wrb-static-txt VIEWPORT_WIDGETS u0 u0 BLACK WHITE u"Widgets demo")
 
@@ -218,15 +249,139 @@
             selected: true
         })))
 
+(define-constant TEXTLINE_1
+    (wrb-textline VIEWPORT_WIDGETS u10 u0 u60 u"Initial text"))
+
+(define-constant TEXTAREA_1
+    (wrb-textarea VIEWPORT_WIDGETS u15 u0 u3 u60 (* u2 u3 u60) u"Initial text"))
+
+(define-private (errmsg (str (string-ascii 512)))
+    (unwrap-panic (as-max-len? str u512)))
+
+(define-data-var err-countdown uint u0)
+(define-data-var last-err-msg (string-utf8 12800) u"")
+
+(define-private (display-errmsg (msg (string-ascii 512)))
+    (let (
+        (err-utf8
+            (unwrap-panic (as-max-len?
+                (unwrap-panic (wrb-string-ascii-to-string-utf8? msg))
+                u12800)))
+    )
+        (unwrap-panic (wrb-viewport-clear VIEWPORT_ERROR))
+        (unwrap-panic (wrb-txt VIEWPORT_ERROR u0 u0 RED WHITE u"   "))
+        (unwrap-panic (wrb-txt VIEWPORT_ERROR u0 u3 RED WHITE err-utf8))
+        (var-set err-countdown u5)
+        (var-set last-err-msg err-utf8)
+        (unwrap-panic (as-max-len? msg u512))
+    ))
+
+(define-private (update-errmsg-counter (err-ct uint))
+    (if (< u0 err-ct)
+        (begin
+            (unwrap-panic (wrb-txt VIEWPORT_ERROR u0 u0 RED WHITE u"   "))
+            (unwrap-panic (wrb-txt VIEWPORT_ERROR u0 u0 RED WHITE (int-to-utf8 err-ct)))
+            (unwrap-panic (wrb-txt VIEWPORT_ERROR u0 u3 RED WHITE (var-get last-err-msg)))
+            (var-set err-countdown (- err-ct u1))
+            true)
+        true))
+
 (define-data-var event-count uint u0)
+
+(define-private (inner-setup-wrbpod)
+    (let (
+        (appname (wrb-get-app-name))
+        (wrbpod-session (unwrap! (wrbpod-open (wrbpod-default))
+            (err (errmsg "setup-wrbpod: Failed to open default wrbpod"))))
+        (num-slots (unwrap! (wrbpod-get-num-slots wrbpod-session { name: (get name appname), namespace: (get namespace appname) })
+            (err (errmsg "setup-wrbpod: Failed to get number of slots for default wrbpod session"))))
+    )
+    (if (is-eq num-slots u0)
+        (begin 
+           (unwrap! (wrbpod-alloc-slots wrbpod-session u1)
+               (err (errmsg "setup-wrbpod: Failed to allocate slots to default wrbpod")))
+           (ok true))
+        (ok true))))
+
+(define-private (setup-wrbpod)
+    (let (
+       (result (inner-setup-wrbpod))
+    )
+    (match result
+        ok-res (ok ok-res)
+        err-res (err { code: u1, message: (display-errmsg err-res) }))))
+
+(define-private (inner-get-count-from-wrbpod)
+    (let (
+        (wrbpod-session (unwrap! (wrbpod-open (wrbpod-default))
+            (err (errmsg "get-count-from-wrbpod: Failed to open default wrbpod"))))
+    )
+    ;; TODO: error out here on appropriate error
+    (match (wrbpod-fetch-slot wrbpod-session u0)
+        slot true
+        err-txt false)
+    (let (
+        (count-buff (unwrap! (wrbpod-get-slice wrbpod-session u0 u0)
+            (err (errmsg "get-count-from-wrbpod: Failed to get slice 0 of slot 0"))))
+        (count (unwrap! (from-consensus-buff? uint count-buff)
+            (err (errmsg "get-count-from-wrbpod: Failed to decode count"))))
+    )
+    (ok count))))
+
+(define-private (get-count-from-wrbpod)
+    (let (
+        (result (inner-get-count-from-wrbpod))
+    )
+    (match result
+        ok-res (ok ok-res)
+        err-res (err { code: u1, message: (display-errmsg err-res) }))))
+
+(define-private (inner-save-count-to-wrbpod (count uint))
+    (let (
+        (wrbpod-session (unwrap! (wrbpod-open (wrbpod-default))
+            (err (errmsg "save-count-to-wrbpod: Failed to open default wrbpod"))))
+    )
+    (match (wrbpod-fetch-slot wrbpod-session u0)
+        slot true
+        err-txt false)
+    (unwrap! (wrbpod-put-slice wrbpod-session u0 u0 (unwrap-panic (to-consensus-buff? count)))
+        (err (errmsg "save-count-to-wrbpod: Failed to store `count` to slice 0 of slot 0 of default wrbpod")))
+    (unwrap! (wrbpod-sync-slot wrbpod-session u0)
+        (err (errmsg "save-count-to-wrbpod: Failed to sync slot 0 of default wrbpod")))
+    (ok true)))
+
+(define-private (save-count-to-wrbpod (count uint))
+    (let (
+        (result (inner-save-count-to-wrbpod count))
+    )
+    (match result
+        ok-res (ok ok-res)
+        err-res (err { code: u1, message: (display-errmsg err-res) }))))
 
 (define-public (main (element-type uint) (element-id uint) (event-type uint) (event-payload (buff 1024)))
     (let (
         (events (var-get event-count))
+        (err-ct (var-get err-countdown))
+        (wrbpod-count (match (get-count-from-wrbpod)
+            value value
+            error u111111111))
     )
+    (try! (setup-wrbpod))
+
     (try! (wrb-viewport-clear VIEWPORT_STATUS))
+
+    ;; update error
+    (if (is-eq err-ct u0)
+        (try! (wrb-viewport-clear VIEWPORT_ERROR))
+        (update-errmsg-counter err-ct))
+
     (try! (wrb-txt VIEWPORT_STATUS u0 u0 BLACK WHITE (concat u"Ran event loop " (concat (int-to-utf8 events) u" time(s)" ))))
+    (try! (wrb-txt VIEWPORT_STATUS u1 u0 BLACK WHITE (concat u"Count from wrbpod: " (int-to-utf8 wrbpod-count))))
+
     (var-set event-count (+ u1 events))
+
+    (try! (save-count-to-wrbpod events))
+ 
     (ok true)))
 
 (wrb-event-loop "main")

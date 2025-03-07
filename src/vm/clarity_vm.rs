@@ -19,6 +19,8 @@ use std::error;
 use std::fmt;
 use std::io::Error as io_error;
 
+use sha2::{Digest, Sha256};
+
 use clarity::{
     vm::analysis,
     vm::analysis::{errors::CheckError, ContractAnalysis},
@@ -64,13 +66,13 @@ use crate::vm::ClarityVM;
 use crate::vm::Error;
 use crate::vm::WRB_LOW_LEVEL_CONTRACT;
 
-use stacks_common::address::{
-    C32_ADDRESS_VERSION_MAINNET_SINGLESIG, C32_ADDRESS_VERSION_TESTNET_SINGLESIG,
-};
+use stacks_common::address::C32_ADDRESS_VERSION_MAINNET_SINGLESIG;
 use stacks_common::types::chainstate::StacksBlockId;
 use stacks_common::util::hash::to_hex;
 use stacks_common::util::hash::Hash160;
+use stacks_common::util::hash::Sha256Sum;
 
+use crate::core::split_fqn;
 use crate::core::with_global_config;
 
 use crate::vm::BOOT_CODE;
@@ -169,33 +171,35 @@ impl ClarityStorage for ReadOnlyWrbStore<'_> {
 }
 
 impl ClarityVM {
-    pub fn new(db_path: &str, domain: &str) -> Result<ClarityVM, Error> {
+    pub fn new(db_path: &str, domain: &str, version: u32) -> Result<ClarityVM, Error> {
         let wrbdb = WrbDB::open(db_path, domain, None)?;
         let created = wrbdb.created();
-        let mainnet = with_global_config(|cfg| cfg.mainnet()).ok_or(Error::NotInitialized)?;
 
-        let mut parts = domain.split(".");
-        let Some(name) = parts.next() else {
-            return Err(Error::InvalidInput("Invalid BNS name".into()));
-        };
-        let Some(namespace) = parts.next() else {
-            return Err(Error::InvalidInput("Invalid BNS name".into()));
-        };
-        if parts.next().is_some() {
-            return Err(Error::InvalidInput("Invalid BNS name".into()));
-        }
+        let (name, namespace) = split_fqn(domain).map_err(|e_str| Error::InvalidInput(e_str))?;
 
         let mut vm = ClarityVM {
             db: wrbdb,
-            mainnet,
             app_name: name.to_string(),
             app_namespace: namespace.to_string(),
+            app_version: version,
         };
 
         if created {
             vm.install_boot_code(BOOT_CODE)?;
         }
         Ok(vm)
+    }
+
+    /// Get the code hash (hash of compressed bytes and version)
+    pub fn get_code_hash(&self, compressed_bytes: &[u8]) -> Hash160 {
+        let mut h = Sha256::new();
+        h.update(compressed_bytes);
+        h.update(&self.app_version.to_be_bytes());
+
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(h.finalize().as_slice());
+
+        Hash160::from_sha256(&bytes)
     }
 
     /// Start working on the next iteration of loading up the wrb page
@@ -218,9 +222,8 @@ impl ClarityVM {
             cur_height + 1
         );
 
-        let mainnet = self.mainnet;
         let ll_contract_id = QualifiedContractIdentifier::new(
-            boot_code_addr(mainnet).into(),
+            boot_code_addr(true).into(),
             ContractName::try_from(WRB_LOW_LEVEL_CONTRACT).unwrap(),
         );
         let headers_db = self.db.headers_db();
@@ -228,8 +231,7 @@ impl ClarityVM {
         let mut db = write_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
 
         db.begin();
-        let mut vm_env =
-            OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+        let mut vm_env = OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
         let (contract, _, _) = vm_env.execute_in_env(
             StandardPrincipalData::transient().into(),
             None,
@@ -262,11 +264,7 @@ impl ClarityVM {
     /// Get the code ID for the page
     pub fn get_code_id(&self) -> QualifiedContractIdentifier {
         let hash = Hash160::from_data(&self.db.get_domain().as_bytes());
-        let version = if self.mainnet {
-            C32_ADDRESS_VERSION_MAINNET_SINGLESIG
-        } else {
-            C32_ADDRESS_VERSION_TESTNET_SINGLESIG
-        };
+        let version = C32_ADDRESS_VERSION_MAINNET_SINGLESIG;
         QualifiedContractIdentifier::new(
             StandardPrincipalData::new(version, hash.0).expect("Infallible"),
             "main".into(),
@@ -291,16 +289,16 @@ impl ClarityVM {
 
     /// Set up the wrb boot code
     fn install_boot_code(&mut self, boot_code: &[(&str, &str)]) -> Result<(), Error> {
-        let mainnet = self.mainnet;
         let name = self.app_name.clone();
         let namespace = self.app_namespace.clone();
+        let version = self.app_version;
 
         let headers_db = self.headers_db();
         let mut write_tx = self.db.begin(&BOOT_BLOCK_ID, &GENESIS_BLOCK_ID);
 
         for (boot_code_name, boot_code_contract) in boot_code.iter() {
             let contract_identifier = QualifiedContractIdentifier::new(
-                boot_code_addr(mainnet).into(),
+                boot_code_addr(true).into(),
                 ContractName::try_from(boot_code_name.to_string()).unwrap(),
             );
             let contract_content = *boot_code_contract;
@@ -333,7 +331,7 @@ impl ClarityVM {
             let mut db = write_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
             db.begin();
             let mut vm_env =
-                OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+                OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
             vm_env
                 .initialize_versioned_contract(
                     contract_identifier.clone(),
@@ -355,17 +353,16 @@ impl ClarityVM {
         }
 
         // set domain name and code hash
-        wrb_debug!("Set app name to {}.{}", name, namespace);
+        wrb_debug!("Set app name to {}.{} version {}", name, namespace, version);
 
         let ll_contract_id = QualifiedContractIdentifier::new(
-            boot_code_addr(mainnet).into(),
+            boot_code_addr(true).into(),
             ContractName::try_from(WRB_LOW_LEVEL_CONTRACT).unwrap(),
         );
 
         let mut db = write_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
         db.begin();
-        let mut vm_env =
-            OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+        let mut vm_env = OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
         let (contract, _, _) = vm_env.execute_in_env(
             StandardPrincipalData::transient().into(),
             None,
@@ -374,9 +371,10 @@ impl ClarityVM {
         )?;
 
         let code = format!(
-            r#"(set-app-name {{ name: 0x{}, namespace: 0x{} }})"#,
+            r#"(set-app-name {{ name: 0x{}, namespace: 0x{}, version: u{} }})"#,
             to_hex(name.as_bytes()),
-            to_hex(namespace.as_bytes())
+            to_hex(namespace.as_bytes()),
+            version
         );
         vm_env.execute_in_env(
             StandardPrincipalData::transient().into(),

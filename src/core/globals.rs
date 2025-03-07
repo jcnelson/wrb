@@ -18,20 +18,31 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use clarity::vm::types::QualifiedContractIdentifier;
+
 use crate::core::Config;
 
 use crate::storage::StackerDBClient;
 use crate::storage::Wrbpod;
+use crate::storage::WrbpodAddress;
 
 use std::fs::File;
 use std::io;
 use std::io::Write;
+
+use rand::thread_rng;
+use rand::Rng;
+use rand::RngCore;
 
 /// Globally-accessible state that is hard to pass around otherwise
 pub struct Globals {
     pub config: Option<Config>,
     /// Maps session IDs to wrbpod state
     pub wrbpod_sessions: HashMap<u128, Wrbpod>,
+    /// Maps contract IDs to session IDs
+    pub wrbpod_addr_to_session_id: HashMap<WrbpodAddress, u128>,
+    /// Next wrbpod session ID
+    next_wrbpod_session_id: u128,
 }
 
 impl Default for Globals {
@@ -39,6 +50,8 @@ impl Default for Globals {
         Globals {
             config: None,
             wrbpod_sessions: HashMap::new(),
+            wrbpod_addr_to_session_id: HashMap::new(),
+            next_wrbpod_session_id: 0,
         }
     }
 }
@@ -46,6 +59,10 @@ impl Default for Globals {
 impl Globals {
     pub fn new() -> Globals {
         Globals::default()
+    }
+
+    pub fn reset(&mut self) {
+        self.wrbpod_sessions.clear();
     }
 
     pub fn get_config(&self) -> Config {
@@ -64,23 +81,51 @@ impl Globals {
         self.config = Some(conf);
     }
 
-    pub fn add_wrbpod_session(&mut self, session_id: u128, session: Wrbpod) {
-        self.wrbpod_sessions.insert(session_id, session);
+    pub fn next_wrbpod_session_id(&mut self) -> u128 {
+        let next_id = self.next_wrbpod_session_id;
+        self.next_wrbpod_session_id += 1;
+        next_id
     }
 
-    pub fn remove_wrbpod_session(&mut self, session_id: u128) {
-        self.wrbpod_sessions.remove(&session_id);
+    pub fn add_wrbpod_session(
+        &mut self,
+        session_id: u128,
+        wrbpod_addr: WrbpodAddress,
+        session: Wrbpod,
+    ) {
+        wrb_debug!("Wrbpod session for {} is {}", &wrbpod_addr, session_id);
+        self.wrbpod_sessions.insert(session_id, session);
+        self.wrbpod_addr_to_session_id
+            .insert(wrbpod_addr, session_id);
     }
 
     pub fn get_wrbpod_session(&mut self, session_id: u128) -> Option<&mut Wrbpod> {
         self.wrbpod_sessions.get_mut(&session_id)
+    }
+
+    pub fn get_wrbpod_session_id_by_address(
+        &mut self,
+        wrbpod_addr: &WrbpodAddress,
+    ) -> Option<u128> {
+        let session_id = *self.wrbpod_addr_to_session_id.get(wrbpod_addr)?;
+        Some(session_id)
+    }
+
+    pub fn get_wrbpod_session_by_address(
+        &mut self,
+        wrbpod_addr: &WrbpodAddress,
+    ) -> Option<&mut Wrbpod> {
+        let session_id = self.get_wrbpod_session_id_by_address(wrbpod_addr)?;
+        self.get_wrbpod_session(session_id)
     }
 }
 
 lazy_static! {
     pub static ref GLOBALS: Mutex<Globals> = Mutex::new(Globals {
         config: None,
+        wrbpod_addr_to_session_id: HashMap::new(),
         wrbpod_sessions: HashMap::new(),
+        next_wrbpod_session_id: 0,
     });
     pub static ref LOGFILE: Mutex<Option<File>> = Mutex::new(Some(
         File::options()

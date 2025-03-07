@@ -36,6 +36,9 @@ use clarity::vm::types::Value;
 
 use stacks_common::util::hash::Hash160;
 
+use serde;
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct BNSNameRecord {
     pub zonefile: Option<Vec<u8>>,
@@ -44,6 +47,57 @@ pub struct BNSNameRecord {
 impl BNSNameRecord {
     pub fn empty() -> Self {
         Self { zonefile: None }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct BNSNameOwner {
+    pub renewal: u128,
+    pub owner: PrincipalData,
+}
+
+impl TryFrom<ResponseData> for BNSNameOwner {
+    type Error = Error;
+    fn try_from(v_ok: ResponseData) -> Result<Self, Self::Error> {
+        if !v_ok.committed {
+            return Err(Error::Deserialize("Expected Ok-response".into()));
+        }
+
+        let Value::Tuple(tuple) = *v_ok.data else {
+            return Err(Error::Deserialize("BNS name info is not a tuple".into()));
+        };
+
+        let renewal = tuple
+            .get("renewal")
+            .cloned()
+            .or_else(|_| {
+                Err(Error::Deserialize(
+                    "BNS name owner tuple is missing `renewal-height`".into(),
+                ))
+            })?
+            .expect_u128()
+            .or_else(|_| {
+                Err(Error::Deserialize(
+                    "BNS `renewal` value is not a u128".into(),
+                ))
+            })?;
+
+        let owner = tuple
+            .get("owner")
+            .cloned()
+            .or_else(|_| {
+                Err(Error::Deserialize(
+                    "BNS name owner tuple is missing `owner`".into(),
+                ))
+            })?
+            .expect_principal()
+            .or_else(|_| {
+                Err(Error::Deserialize(
+                    "BNS `owner` value is not a principal".into(),
+                ))
+            })?;
+
+        Ok(Self { renewal, owner })
     }
 }
 
@@ -80,6 +134,12 @@ pub enum BNSError {
     NameRevoked,
 }
 
+impl BNSError {
+    pub fn name_exists(&self) -> bool {
+        matches!(self, BNSError::NoZonefileFound)
+    }
+}
+
 impl TryFrom<ResponseData> for BNSError {
     type Error = Error;
     fn try_from(v_err: ResponseData) -> Result<Self, Error> {
@@ -100,9 +160,23 @@ pub trait BNSResolver {
     fn lookup(
         &mut self,
         runner: &mut Runner,
-        namespace: &str,
         name: &str,
+        namespace: &str,
     ) -> Result<Result<BNSNameRecord, BNSError>, Error>;
+
+    fn get_owner(
+        &mut self,
+        runner: &mut Runner,
+        name: &str,
+        namespace: &str,
+    ) -> Result<Option<BNSNameOwner>, Error>;
+
+    fn get_price(
+        &mut self,
+        runner: &mut Runner,
+        name: &str,
+        namespace: &str,
+    ) -> Result<Option<u128>, Error>;
 }
 
 pub struct NodeBNSResolver {}
@@ -122,6 +196,24 @@ impl BNSResolver for NodeBNSResolver {
     ) -> Result<Result<BNSNameRecord, BNSError>, Error> {
         runner.bns_lookup(name, namespace)
     }
+
+    fn get_owner(
+        &mut self,
+        runner: &mut Runner,
+        name: &str,
+        namespace: &str,
+    ) -> Result<Option<BNSNameOwner>, Error> {
+        runner.bns_get_name_owner(name, namespace)
+    }
+
+    fn get_price(
+        &mut self,
+        runner: &mut Runner,
+        name: &str,
+        namespace: &str,
+    ) -> Result<Option<u128>, Error> {
+        runner.bns_get_name_price(name, namespace)
+    }
 }
 
 impl Runner {
@@ -132,9 +224,9 @@ impl Runner {
         name: &str,
         namespace: &str,
     ) -> Result<Result<BNSNameRecord, BNSError>, Error> {
-        let bns_contract = self.bns_contract_id.clone();
+        let zonefile_contract = self.zonefile_contract_id.clone();
         let v = self.call_readonly(
-            &bns_contract,
+            &zonefile_contract,
             "resolve-name",
             &[
                 Value::buff_from(name.as_bytes().to_vec())?,
@@ -152,6 +244,69 @@ impl Runner {
                 return Ok(Ok(BNSNameRecord::empty()));
             }
             return Ok(Err(bns_err));
+        }
+    }
+
+    /// Determine BNS name owner
+    pub fn bns_get_name_owner(
+        &mut self,
+        name: &str,
+        namespace: &str,
+    ) -> Result<Option<BNSNameOwner>, Error> {
+        let bns_contract = self.bns_contract_id.clone();
+        let v = self.call_readonly(
+            &bns_contract,
+            "can-resolve-name",
+            &[
+                Value::buff_from(namespace.as_bytes().to_vec())?,
+                Value::buff_from(name.as_bytes().to_vec())?,
+            ],
+        )?;
+        let Value::Response(v_res) = v else {
+            return Err(Error::Deserialize("Expected response".into()));
+        };
+        if v_res.committed {
+            return Ok(Some(BNSNameOwner::try_from(v_res)?));
+        } else {
+            // name or namespace not found
+            return Ok(None);
+        }
+    }
+
+    /// Determine BNS name price
+    pub fn bns_get_name_price(
+        &mut self,
+        name: &str,
+        namespace: &str,
+    ) -> Result<Option<u128>, Error> {
+        let bns_contract = self.bns_contract_id.clone();
+        let v = self.call_readonly(
+            &bns_contract,
+            "get-name-price",
+            &[
+                Value::buff_from(namespace.as_bytes().to_vec())?,
+                Value::buff_from(name.as_bytes().to_vec())?,
+            ],
+        )?;
+        let Value::Response(v_res) = v else {
+            return Err(Error::Deserialize("Expected response".into()));
+        };
+        if v_res.committed {
+            let Value::Response(price_res) = *v_res.data else {
+                return Err(Error::Deserialize("Price-res is not a response".into()));
+            };
+            if !price_res.committed {
+                return Err(Error::Deserialize(
+                    "Error getting BNS response for price".into(),
+                ));
+            }
+            let Value::UInt(price) = *price_res.data else {
+                return Err(Error::Deserialize("Proce is not a u128".into()));
+            };
+            return Ok(Some(price));
+        } else {
+            // namespace not found
+            return Ok(None);
         }
     }
 }

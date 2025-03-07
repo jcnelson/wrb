@@ -21,8 +21,8 @@ use std::collections::HashSet;
 
 use crate::storage::{
     Error, StackerDBClient, Wrbpod, WrbpodAppState, WrbpodSlices, WrbpodSuperblock,
-    WRBPOD_APP_STATE_VERSION, WRBPOD_CHUNK_MAX_SIZE, WRBPOD_MAX_SLOTS, WRBPOD_SLICES_VERSION,
-    WRBPOD_SUPERBLOCK_SLOT_ID, WRBPOD_SUPERBLOCK_VERSION,
+    WRBPOD_APP_STATE_VERSION, WRBPOD_CHUNK_MAX_SIZE, WRBPOD_SLICES_VERSION,
+    WRBPOD_SUPERBLOCK_VERSION,
 };
 
 use clarity::vm::types::QualifiedContractIdentifier;
@@ -37,6 +37,8 @@ use stacks_common::util::secp256k1::Secp256k1PrivateKey;
 
 use libstackerdb::SlotMetadata;
 use libstackerdb::StackerDBChunkData;
+
+use crate::storage::WrbpodSlot;
 
 pub const WRBPOD_SLICES_INITIAL_SIZE: u64 = 1 + 8; // version + index_length
 
@@ -123,33 +125,45 @@ impl WrbpodSlices {
 }
 
 impl WrbpodSuperblock {
-    pub fn new() -> Self {
+    pub fn empty() -> Self {
         Self {
             version: WRBPOD_SUPERBLOCK_VERSION,
+            slot_ids: vec![],
             apps: BTreeMap::new(),
         }
     }
 
-    /// Find a free slot
-    fn find_free_slot(&self, used: &[u32]) -> Option<u32> {
-        let mut occupied = HashSet::new();
-        for app_state in self.apps.values() {
-            for slot in app_state.slots.iter() {
-                occupied.insert(*slot);
+    pub fn new(slot_ids: Vec<u32>) -> Self {
+        Self {
+            version: WRBPOD_SUPERBLOCK_VERSION,
+            slot_ids: slot_ids
+                .into_iter()
+                .map(|id| WrbpodSlot::Free(id))
+                .collect(),
+            apps: BTreeMap::new(),
+        }
+    }
+
+    /// Find a free slot and set if filled.
+    /// Return the slot ID on success.
+    fn fill_free_slot(&mut self, used: &mut HashSet<u32>) -> Option<u32> {
+        for i in 0..self.slot_ids.len() {
+            let Ok(i_32) = u32::try_from(i) else {
+                return None;
+            };
+
+            if used.contains(&i_32) {
+                continue;
+            }
+
+            if self.slot_ids[i].is_free() {
+                let filled = self.slot_ids[i].as_filled();
+                self.slot_ids[i] = filled;
+                used.insert(i_32);
+                return Some(self.slot_ids[i].slot_id());
             }
         }
-        for s in used {
-            occupied.insert(*s);
-        }
-
-        // NOTE: slot 0 is the superblock
-        for slot in 1..WRBPOD_MAX_SLOTS {
-            if !occupied.contains(&slot) {
-                return Some(slot);
-            }
-        }
-
-        return None;
+        None
     }
 
     /// Allocate more slots to a particular app.
@@ -158,40 +172,50 @@ impl WrbpodSuperblock {
     /// Returns false if there's not enough space.
     pub fn allocate_slots(&mut self, app_name: &str, code_hash: Hash160, num_slots: u32) -> bool {
         // find more slots
+        let mut slots_set = HashSet::new();
         let mut slots = vec![];
         for _i in 0..num_slots {
-            let Some(free_slot) = self.find_free_slot(&slots) else {
+            if let Some(slot_id) = self.fill_free_slot(&mut slots_set) {
+                slots.push(slot_id);
+            } else {
                 // not enough space
-                wrb_test_debug!(
+                wrb_warn!(
                     "Not enough free space to allocate {} slots for {} ({})",
                     num_slots,
                     app_name,
                     &code_hash
                 );
+                for i in slots_set.into_iter() {
+                    let Ok(i_usize) = usize::try_from(i) else {
+                        continue;
+                    };
+                    let f = self.slot_ids[i_usize].as_free();
+                    self.slot_ids[i_usize] = f;
+                }
                 return false;
             };
-            slots.push(free_slot);
         }
 
         let Some(app_state) = self.apps.get_mut(&app_name.to_string()) else {
             let new_app_state = WrbpodAppState {
                 version: WRBPOD_APP_STATE_VERSION,
                 code_hash,
-                slots,
+                slots: slots.clone(),
             };
             self.apps.insert(app_name.to_string(), new_app_state);
-            wrb_test_debug!(
-                "Added {} more slots for existing app state for {} ({})",
+            wrb_debug!(
+                "Added {} more slots for existing app state for {} ({}): {:?}",
                 num_slots,
                 app_name,
-                &code_hash
+                &code_hash,
+                &slots
             );
             return true;
         };
 
         // add slots
         app_state.slots.append(&mut slots);
-        wrb_test_debug!(
+        wrb_debug!(
             "Instantiated {} slots for new app state for {} ({})",
             num_slots,
             app_name,
@@ -202,7 +226,20 @@ impl WrbpodSuperblock {
 
     /// Free up slots for an app. Drops all of its app state
     pub fn delete_slots(&mut self, app_name: &str) {
-        self.apps.remove(&app_name.to_string());
+        let app_name_str = app_name.to_string();
+        let Some(app_rec) = self.apps.remove(&app_name_str) else {
+            return;
+        };
+        for slot in app_rec.slots.into_iter() {
+            // mark the associated slot as free
+            for i in 0..self.slot_ids.len() {
+                if self.slot_ids[i].slot_id() == slot {
+                    let free = self.slot_ids[i].as_free();
+                    self.slot_ids[i] = free;
+                    break;
+                }
+            }
+        }
     }
 
     /// Get a ref to an app's state
@@ -233,40 +270,98 @@ impl WrbpodSuperblock {
 }
 
 impl Wrbpod {
+    /// given a list of signers and a private key, find the slot IDs this private key can access.
+    fn find_available_slots(signers: &[StacksAddress], privkey: &Secp256k1PrivateKey) -> Vec<u32> {
+        let mut available = vec![];
+        let addr = StacksAddress::p2pkh(true, &StacksPublicKey::from_private(privkey));
+        for (i, signer) in signers.iter().enumerate() {
+            let Ok(slot_id) = u32::try_from(i) else {
+                break;
+            };
+
+            if *signer == addr {
+                available.push(slot_id);
+            }
+        }
+        available
+    }
+
+    pub fn superblock_slot_id(&self) -> u32 {
+        self.superblock_slot_id
+    }
+
+    fn superblock_slot_index(&self) -> usize {
+        usize::try_from(self.superblock_slot_id).expect("FATAL: superblock slot ID exceeds usize")
+    }
+
     /// open an existing wrbpod
+    /// `privkey` is the key that can sign and upload slots
     pub fn open(
         home_client: Box<dyn StackerDBClient>,
         replica_client: Box<dyn StackerDBClient>,
         privkey: Secp256k1PrivateKey,
+        superblock_slot_id: u32,
     ) -> Result<Self, Error> {
         let mut wrbpod = Wrbpod {
-            superblock: WrbpodSuperblock::new(),
+            superblock: WrbpodSuperblock::empty(), // will be overwritten
             privkey,
             home_client,
             replica_client,
             chunks: HashMap::new(),
             signers: None,
+            superblock_slot_id,
         };
         wrbpod.refresh_signers()?;
         wrbpod.download_superblock()?;
+        wrb_test_debug!(
+            "Opened wrbpod for signer {}, superblock slot ID is {}",
+            &StacksAddress::p2pkh(true, &StacksPublicKey::from_private(&privkey)),
+            wrbpod.superblock_slot_id
+        );
         Ok(wrbpod)
     }
 
-    /// create a new wrbpod with an empty superblock
+    /// Make a superblock
+    /// Returns Err if there aren't enough slots for the superblock
+    fn make_superblock(
+        superblock_slot_id: u32,
+        signers: &[StacksAddress],
+        privkey: &Secp256k1PrivateKey,
+    ) -> Result<WrbpodSuperblock, Error> {
+        let available_slots = Self::find_available_slots(&signers, &privkey);
+        let mut wrbpod_slots = available_slots.clone();
+        wrbpod_slots.retain(|slot| *slot != superblock_slot_id);
+
+        if available_slots.len() == wrbpod_slots.len() {
+            // superblock is not available to us
+            return Err(Error::NoSuperblock);
+        }
+
+        Ok(WrbpodSuperblock::new(wrbpod_slots))
+    }
+
+    /// create a new wrbpod with an empty superblock.
+    /// All signer slots that `privkey` can access are allocated to the superblock.
+    /// `privkey` is the key that can sign and upload slots.
+    /// The superblock index is the lowest slot we can sign for.
     pub fn format(
-        home_client: Box<dyn StackerDBClient>,
+        mut home_client: Box<dyn StackerDBClient>,
         replica_client: Box<dyn StackerDBClient>,
         privkey: Secp256k1PrivateKey,
+        superblock_slot_id: u32,
     ) -> Result<Self, Error> {
+        let signers = home_client.get_signers()?;
+        let superblock = Self::make_superblock(superblock_slot_id, &signers, &privkey)?;
         let mut wrbpod = Wrbpod {
-            superblock: WrbpodSuperblock::new(),
+            superblock,
             privkey,
             home_client,
             replica_client,
             chunks: HashMap::new(),
-            signers: None,
+            signers: Some(signers),
+            superblock_slot_id,
         };
-        wrbpod.refresh_signers()?;
+
         wrbpod.upload_superblock()?;
         Ok(wrbpod)
     }
@@ -281,10 +376,14 @@ impl Wrbpod {
 
     /// Update the cached copy of the superblock
     fn download_superblock(&mut self) -> Result<(), Error> {
+        wrb_test_debug!("Fetching superblock from slot {}", self.superblock_slot_id);
         let all_slot_metadata = self.replica_client.list_chunks()?;
-        let slot_md = all_slot_metadata.get(0).ok_or(Error::GetChunk(
-            "no superblock chunk defined in slot metadata".into(),
-        ))?;
+        let slot_md =
+            all_slot_metadata
+                .get(self.superblock_slot_index())
+                .ok_or(Error::GetChunk(
+                    "no superblock chunk defined in slot metadata".into(),
+                ))?;
 
         if self.signers.is_none() {
             self.refresh_signers()?;
@@ -293,7 +392,7 @@ impl Wrbpod {
         let Some(signers) = self.signers.as_ref() else {
             return Err(Error::GetChunk("Unable to load signer list".into()));
         };
-        let Some(signer_addr) = signers.get(0).cloned() else {
+        let Some(signer_addr) = signers.get(self.superblock_slot_index()).cloned() else {
             return Err(Error::GetChunk(format!(
                 "No such signer for chunk ID {}",
                 0
@@ -302,7 +401,8 @@ impl Wrbpod {
 
         if slot_md.slot_version == 0 && slot_md.data_hash == Sha512Trunc256Sum([0x00; 32]) {
             // no superblock instantiated yet
-            self.superblock = WrbpodSuperblock::new();
+            self.superblock =
+                Self::make_superblock(self.superblock_slot_id, &signers, &&self.privkey)?;
             return Ok(());
         }
 
@@ -321,8 +421,10 @@ impl Wrbpod {
         }
 
         // get the superblock chunk
-        let chunks = self.replica_client.get_latest_chunks(&[0])?;
-        let Some(chunk_opt) = chunks.get(0) else {
+        let chunks = self
+            .replica_client
+            .get_latest_chunks(&[self.superblock_slot_id])?;
+        let Some(chunk_opt) = chunks.get(self.superblock_slot_index()) else {
             return Err(Error::NoSuchChunk);
         };
         let Some(chunk) = chunk_opt else {
@@ -341,16 +443,17 @@ impl Wrbpod {
     /// Retries on stale version.
     fn upload_superblock(&mut self) -> Result<(), Error> {
         let slot_metadata = self.replica_client.list_chunks()?;
-        let superblock_md = slot_metadata
-            .get(WRBPOD_SUPERBLOCK_SLOT_ID as usize)
-            .ok_or(Error::PutChunk(
-                "No superblock chunk defined in slot metadata".into(),
-            ))?;
+        let superblock_md =
+            slot_metadata
+                .get(self.superblock_slot_index())
+                .ok_or(Error::PutChunk(
+                    "No superblock chunk defined in slot metadata".into(),
+                ))?;
         let superblock_bytes = self.superblock.serialize_to_vec();
         let mut slot_version = superblock_md.slot_version;
         loop {
             let mut superblock_chunk = StackerDBChunkData::new(
-                WRBPOD_SUPERBLOCK_SLOT_ID,
+                self.superblock_slot_id,
                 slot_version,
                 superblock_bytes.clone(),
             );
@@ -359,8 +462,8 @@ impl Wrbpod {
                 .map_err(|_| Error::Codec(CodecError::SerializeError("Failed to sign".into())))?;
 
             wrb_test_debug!(
-                "Signed superblock with {} ({}): {:?}",
-                &self.privkey.to_hex(),
+                "Signed superblock slot {} {}: {:?}",
+                self.superblock_slot_id,
                 StacksAddress::p2pkh(true, &StacksPublicKey::from_private(&self.privkey)),
                 &superblock_chunk
             );

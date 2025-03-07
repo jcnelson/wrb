@@ -25,10 +25,12 @@ use stacks_common::util::secp256k1::Secp256k1PublicKey;
 
 use stacks_common::codec::Error as CodecError;
 use stacks_common::codec::StacksMessageCodec;
-use stacks_common::codec::{read_next, write_next};
+use stacks_common::codec::{read_next, read_next_at_most, write_next};
 use stacks_common::types::chainstate::StacksAddress;
 use stacks_common::util::hash::Hash160;
 use stacks_common::util::hash::{hex_bytes, to_hex};
+
+use clarity::vm::types::QualifiedContractIdentifier;
 
 use crate::runner::Error as RuntimeError;
 
@@ -44,8 +46,6 @@ pub mod tests;
 
 pub mod wrbpod;
 
-pub const WRBPOD_SUPERBLOCK_SLOT_ID: u32 = 0;
-
 pub const WRBPOD_SLICES_VERSION: u8 = 0;
 pub const WRBPOD_SUPERBLOCK_VERSION: u8 = 0;
 pub const WRBPOD_APP_STATE_VERSION: u8 = 0;
@@ -58,7 +58,7 @@ pub const WRBPOD_CHUNK_MAX_SIZE: u32 = libstackerdb::STACKERDB_MAX_CHUNK_SIZE;
 pub struct WrbpodSlices {
     /// Version of this struct
     pub version: u8,
-    /// Slices
+    /// Slices -- list of buffers to store
     #[serde(
         serialize_with = "wrbpod_slices_serialize",
         deserialize_with = "wrbpod_slices_deserialize"
@@ -124,31 +124,116 @@ pub struct WrbpodAppState {
     pub slots: Vec<u32>,
 }
 
+/// Free list
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum WrbpodSlot {
+    Filled(u32),
+    Free(u32),
+}
+
+impl WrbpodSlot {
+    pub fn slot_id(&self) -> u32 {
+        match self {
+            Self::Filled(x) => *x,
+            Self::Free(x) => *x,
+        }
+    }
+
+    pub fn is_free(&self) -> bool {
+        match self {
+            Self::Filled(..) => false,
+            Self::Free(..) => true,
+        }
+    }
+
+    pub fn as_filled(&self) -> Self {
+        Self::Filled(self.slot_id())
+    }
+
+    pub fn as_free(&self) -> Self {
+        Self::Free(self.slot_id())
+    }
+}
+
+impl StacksMessageCodec for WrbpodSlot {
+    fn consensus_serialize<W: Write>(&self, fd: &mut W) -> Result<(), CodecError> {
+        match self {
+            Self::Filled(x) => {
+                write_next(fd, &1u8)?;
+                write_next(fd, x)?;
+            }
+            Self::Free(x) => {
+                write_next(fd, &0u8)?;
+                write_next(fd, x)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn consensus_deserialize<R: Read>(fd: &mut R) -> Result<Self, CodecError> {
+        let filled: u8 = read_next(fd)?;
+        match filled {
+            x if x == 0 => {
+                let slot_id: u32 = read_next(fd)?;
+                Ok(Self::Free(slot_id))
+            }
+            x if x == 1 => {
+                let slot_id: u32 = read_next(fd)?;
+                Ok(Self::Filled(slot_id))
+            }
+            _ => Err(CodecError::DeserializeError(
+                "Invalid fill/free byte".into(),
+            )),
+        }
+    }
+}
+
 /// Control structure for a wrbpod.
 /// This gets written to slot 0.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WrbpodSuperblock {
     /// version of this struct
     pub version: u8,
+    /// list of StackerDB slots allocated to this wrbpod, as well as whether or not they're free
+    pub slot_ids: Vec<WrbpodSlot>,
     /// which domains have which slots
     pub apps: BTreeMap<String, WrbpodAppState>,
 }
 
 /// StackerDB client trait (so we can mock it in testing)
 pub trait StackerDBClient: Send {
+    /// Address of the stackerdb host we're talking to
     fn get_host(&self) -> SocketAddr;
+
+    /// List all chunk metadata for the stackerdb
     fn list_chunks(&mut self) -> Result<Vec<SlotMetadata>, RuntimeError>;
+
+    /// Get one or more chunks with specific versions.
+    /// The ith entry in slots_and_versions corresponds to the ith item in the returned list.  A
+    /// Some(..) value indicates that the chunk with that version exists.  A None value indicates
+    /// that a chunk with that version does not exist.
     fn get_chunks(
         &mut self,
         slots_and_versions: &[(u32, u32)],
     ) -> Result<Vec<Option<Vec<u8>>>, RuntimeError>;
+
+    /// Get one or more chunks regardless of what their versions are.
+    /// The ith entry in slots_ids corresponds to the ith item in the returned list.  A
+    /// Some(..) value indicates that the chunk exists.  A None value indicates
+    /// that a chunk does not exist.
     fn get_latest_chunks(&mut self, slot_ids: &[u32])
         -> Result<Vec<Option<Vec<u8>>>, RuntimeError>;
+
+    /// Upload a given chunk to the stackerdb
     fn put_chunk(
         &mut self,
         chunk: StackerDBChunkData,
     ) -> Result<StackerDBChunkAckData, RuntimeError>;
+
+    /// Find a list of nodes that host this stackerdb.  These will be p2p addresses.
     fn find_replicas(&mut self) -> Result<Vec<SocketAddr>, RuntimeError>;
+
+    /// Get the list of signers for the replica.
     fn get_signers(&mut self) -> Result<Vec<StacksAddress>, RuntimeError>;
 }
 
@@ -166,9 +251,48 @@ pub struct Wrbpod {
     signers: Option<Vec<StacksAddress>>,
     /// Maps stackerdb slot ID to slices
     chunks: HashMap<u32, WrbpodSlices>,
+    /// which slot ID contains the superblock
+    superblock_slot_id: u32,
 }
 
 unsafe impl Send for Wrbpod {}
+
+#[derive(Clone, PartialEq, Hash, Eq)]
+pub struct WrbpodAddress {
+    pub contract: QualifiedContractIdentifier,
+    pub slot: u32,
+}
+
+impl WrbpodAddress {
+    pub fn new(contract: QualifiedContractIdentifier, slot: u32) -> Self {
+        Self { contract, slot }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        let mut parts_iter = s.split("/");
+        let qc_str = parts_iter.next()?;
+        let slot_str = parts_iter.next()?;
+        let contract = QualifiedContractIdentifier::parse(qc_str).ok()?;
+        let slot = slot_str.parse::<u32>().ok()?;
+        Some(Self { contract, slot })
+    }
+
+    fn inner_to_string(&self) -> String {
+        format!("{}/{}", &self.contract, self.slot)
+    }
+}
+
+impl fmt::Debug for WrbpodAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", &self.inner_to_string())
+    }
+}
+
+impl fmt::Display for WrbpodAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", &self.inner_to_string())
+    }
+}
 
 #[derive(Debug)]
 pub enum Error {
@@ -178,6 +302,8 @@ pub enum Error {
     PutChunk(String),
     Overflow(String),
     NoSuchChunk,
+    NoSpace,
+    NoSuperblock,
 }
 
 impl From<RuntimeError> for Error {
@@ -265,9 +391,10 @@ impl StacksMessageCodec for WrbpodSlices {
             encoded_size += 8;
 
             if idx_u64 >= index_count {
-                return Err(CodecError::DeserializeError(
-                    "index exceeds number of slices".into(),
-                ))?;
+                return Err(CodecError::DeserializeError(format!(
+                    "index {} exceeds number of slices {}",
+                    idx_u64, index_count
+                )))?;
             }
             let idx = usize::try_from(idx_u64).map_err(|_| {
                 CodecError::DeserializeError("Failed to convert u64 to usize".into())
@@ -298,6 +425,7 @@ impl StacksMessageCodec for WrbpodSlices {
 impl StacksMessageCodec for WrbpodSuperblock {
     fn consensus_serialize<W: Write>(&self, fd: &mut W) -> Result<(), CodecError> {
         write_next(fd, &self.version)?;
+        write_next(fd, &self.slot_ids)?;
         let mut bns_names = Vec::with_capacity(self.apps.len());
         for (bns_name, _) in self.apps.iter() {
             bns_names.push(bns_name.as_bytes().to_vec());
@@ -311,6 +439,7 @@ impl StacksMessageCodec for WrbpodSuperblock {
 
     fn consensus_deserialize<R: Read>(fd: &mut R) -> Result<Self, CodecError> {
         let version: u8 = read_next(fd)?;
+        let slot_ids: Vec<WrbpodSlot> = read_next_at_most(fd, WRBPOD_MAX_SLOTS)?;
         let bns_names_bytes: Vec<Vec<u8>> = read_next(fd)?;
         let mut bns_names = vec![];
         for bns_name_bytes in bns_names_bytes.into_iter() {
@@ -329,6 +458,7 @@ impl StacksMessageCodec for WrbpodSuperblock {
         Ok(Self {
             version,
             apps: app_state,
+            slot_ids,
         })
     }
 }

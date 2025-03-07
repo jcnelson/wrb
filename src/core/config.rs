@@ -17,6 +17,7 @@
 
 use clarity::vm::types::QualifiedContractIdentifier;
 use stacks_common::util::secp256k1::Secp256k1PrivateKey;
+use std::convert::TryFrom;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -24,7 +25,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use toml;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+use crate::storage::WrbpodAddress;
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     /// mainnet or testnet
     mainnet: bool,
@@ -39,9 +42,74 @@ pub struct Config {
     storage: String,
     /// location of the debug file
     debug_path: String,
+    /// our wrbpod
+    wrbpod: WrbpodAddress,
     /// Path from which we loaded this
-    #[serde(skip)]
     __path: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ConfigFile {
+    /// mainnet or testnet
+    mainnet: bool,
+    /// node host
+    node_host: String,
+    /// node port
+    node_port: u16,
+    /// identity key
+    private_key: String,
+    /// location where we store Wrb DBs
+    /// (relative or absolute)
+    storage: Option<String>,
+    /// location of the debug file
+    debug_path: Option<String>,
+    /// our wrbpod, encoded as <address>.<name>/<slot-id>
+    wrbpod: String,
+}
+
+impl ConfigFile {
+    pub fn from_str(content: &str) -> Result<Self, String> {
+        let config = toml::from_str(content).map_err(|e| format!("Invalid toml: {}", e))?;
+        Ok(config)
+    }
+}
+
+impl TryFrom<ConfigFile> for Config {
+    type Error = String;
+    fn try_from(config_file: ConfigFile) -> Result<Self, Self::Error> {
+        let default_wrbpod = WrbpodAddress::parse(&config_file.wrbpod).ok_or_else(|| {
+            format!(
+                "Failed to decode '{}': expected <addr>.<name>/<slot-id>",
+                &config_file.wrbpod
+            )
+        })?;
+
+        Ok(Config {
+            mainnet: config_file.mainnet,
+            node_host: config_file.node_host,
+            node_port: config_file.node_port,
+            private_key: Secp256k1PrivateKey::from_hex(&config_file.private_key)
+                .map_err(|e| format!("Failed to parse `private_key`: {:?}", &e))?,
+            storage: config_file.storage.unwrap_or("./db".into()),
+            debug_path: config_file.debug_path.unwrap_or("./debug.log".into()),
+            wrbpod: default_wrbpod,
+            __path: "".into(),
+        })
+    }
+}
+
+impl From<Config> for ConfigFile {
+    fn from(config: Config) -> Self {
+        Self {
+            mainnet: config.mainnet,
+            node_host: config.node_host.clone(),
+            node_port: config.node_port,
+            private_key: config.private_key.to_hex(),
+            storage: Some(config.storage),
+            debug_path: Some(config.debug_path),
+            wrbpod: config.wrbpod.to_string(),
+        }
+    }
 }
 
 impl Config {
@@ -53,20 +121,23 @@ impl Config {
             private_key: Secp256k1PrivateKey::new(),
             storage: "./db".into(),
             debug_path: "./debug.log".into(),
+            wrbpod: WrbpodAddress::new(
+                QualifiedContractIdentifier::parse(
+                    "SP000000000000000000002Q6VF78.you-need-to-set-up-your-wrbpod",
+                )
+                .unwrap(),
+                0,
+            ),
             __path: "".into(),
         }
     }
 
     pub fn from_path(path: &str) -> Result<Config, String> {
         let content = fs::read_to_string(path).map_err(|e| format!("Invalid path: {}", &e))?;
-        let mut c = Self::from_str(&content)?;
+        let config_file = ConfigFile::from_str(&content)?;
+        let mut c = Config::try_from(config_file)?;
         c.__path = path.into();
         Ok(c)
-    }
-
-    pub fn from_str(content: &str) -> Result<Config, String> {
-        let config: Config = toml::from_str(content).map_err(|e| format!("Invalid toml: {}", e))?;
-        Ok(config)
     }
 
     pub fn mainnet(&self) -> bool {
@@ -81,8 +152,24 @@ impl Config {
         &self.private_key
     }
 
-    /// This is the contract ID of the BNS contract that can resolve a name to a zonefile.
+    pub fn default_wrbpod(&self) -> &WrbpodAddress {
+        &self.wrbpod
+    }
+
+    /// This is the contract ID of the BNS contract that can resolve a name to its owner and price.
     pub fn get_bns_contract_id(&self) -> QualifiedContractIdentifier {
+        if self.mainnet {
+            QualifiedContractIdentifier::parse("SP2QEZ06AGJ3RKJPBV14SY1V5BBFNAW33D96YPGZF.BNS-V2")
+                .unwrap()
+        } else {
+            // private key: e89bb394ecd5161007a84b34ac98d4f7239016c91d3e0c7c3b97aa499693288301
+            QualifiedContractIdentifier::parse("ST1V5THTGSFT6Z793AT7M2H18G3Y9EGVJZNH5E2BG.BNS-V2")
+                .unwrap()
+        }
+    }
+
+    /// This is the contract ID of the BNS contract that can resolve a name to a zonefile.
+    pub fn get_zonefile_contract_id(&self) -> QualifiedContractIdentifier {
         if self.mainnet {
             QualifiedContractIdentifier::parse(
                 "SP2QEZ06AGJ3RKJPBV14SY1V5BBFNAW33D96YPGZF.zonefile-resolver",

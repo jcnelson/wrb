@@ -51,29 +51,29 @@ fn test_wrbpod_open() {
 
     ;; open once
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod, slot: u0 })))
     )
-        (asserts! (is-eq wrbpod-session-id u1) (err "Did not open"))
+        (asserts! (is-eq wrbpod-session-id u0) (err "Did not open"))
     )
     
     ;; open again
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod, slot: u0 })))
     )
-        (asserts! (is-eq wrbpod-session-id u1) (err "Did not open"))
+        (asserts! (is-eq wrbpod-session-id u0) (err "Did not open"))
     )
 
     ;; open a different one
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod-2)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod-2, slot: u0 })))
     )
-        (asserts! (is-eq wrbpod-session-id u2) (err "Did not open"))
+        (asserts! (is-eq wrbpod-session-id u1) (err "Did not open"))
     )
     "#;
 
     let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
 
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
+    let mut vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
     println!("text '{}'", &s);
@@ -94,17 +94,17 @@ fn test_wrbpod_slots() {
 
     ;; open 
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod, slot: u0 })))
         (num-slots (unwrap-panic (wrbpod-get-num-slots wrbpod-session-id { name: 0x666f6f, namespace: 0x627463 })))
     )
-        (asserts! (is-eq wrbpod-session-id u1) (err "Did not open"))
+        (asserts! (is-eq wrbpod-session-id u0) (err "Did not open"))
         (asserts! (is-eq num-slots u0) (err "Had slots for unalloced wrbpod"))
         (asserts! (is-err (wrbpod-fetch-slot wrbpod-session-id u0)) (err "fetched nonexistent slot"))
     )
    
     ;; allocate slots
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod, slot: u0 })))
         (wrbpod-alloc-success (unwrap-panic (wrbpod-alloc-slots wrbpod-session-id u1)))
     ) 
         (asserts! wrbpod-alloc-success (err "Successful allocation failed"))
@@ -112,17 +112,17 @@ fn test_wrbpod_slots() {
 
     ;; check allocation
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod, slot: u0 })))
         (num-slots (unwrap-panic (wrbpod-get-num-slots wrbpod-session-id { name: 0x666f6f, namespace: 0x627463 })))
         (slot-md (unwrap-panic (wrbpod-fetch-slot wrbpod-session-id u0)))
     )
-        (asserts! (is-eq wrbpod-session-id u1) (err { msg: "Did not open", val: wrbpod-session-id }))
+        (asserts! (is-eq wrbpod-session-id u0) (err { msg: "Did not open", val: wrbpod-session-id }))
         (asserts! (is-eq num-slots u1) (err { msg: "Wrong number of slots", val: num-slots }))
         (asserts! (is-eq slot-md { version: u0, signer: none }) (err { msg: "wrong md", val: (get version slot-md) }))
     )
 
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod, slot: u0 })))
     )
         ;; check failures
         (asserts! (is-err (wrbpod-alloc-slots (+ u1 wrbpod-session-id) u1)) (err "alloc'ed slots for a nonexistant wrbpod"))
@@ -133,7 +133,7 @@ fn test_wrbpod_slots() {
 
     let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
 
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
+    let mut vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
     println!("text '{}'", &s);
@@ -154,18 +154,18 @@ fn test_wrbpod_dirty_slices() {
 
     ;; open and allocate 
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod, slot: u0 })))
         (wrbpod-alloc-success (unwrap-panic (wrbpod-alloc-slots wrbpod-session-id u1)))
         (num-slots (unwrap-panic (wrbpod-get-num-slots wrbpod-session-id { name: 0x666f6f, namespace: 0x627463 })))
     )
-        (asserts! (is-eq wrbpod-session-id u1) (err "Did not open"))
+        (asserts! (is-eq wrbpod-session-id u0) (err "Did not open"))
         (asserts! wrbpod-alloc-success (err "Successful allocation failed"))
         (asserts! (is-eq num-slots u1) (err "Allocation failed"))
     )
    
     ;; put a slice
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod, slot: u0 })))
         (fetchslot-res (wrbpod-fetch-slot wrbpod-session-id u0))
         (putslice-res (wrbpod-put-slice wrbpod-session-id u0 u0 0x001122334455))
     )
@@ -175,7 +175,7 @@ fn test_wrbpod_dirty_slices() {
 
     ;; can get the slice back since it's dirty
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod, slot: u0 })))
         (getslice-res (wrbpod-get-slice wrbpod-session-id u0 u0))
     )
         (asserts! (is-ok getslice-res) (err "failed to load dirty slice"))
@@ -185,7 +185,7 @@ fn test_wrbpod_dirty_slices() {
 
     let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
 
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
+    let mut vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
     println!("text '{}'", &s);
@@ -206,18 +206,18 @@ fn test_wrbpod_sync_slot() {
 
     ;; open and allocate 
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod, slot: u0 })))
         (wrbpod-alloc-success (unwrap-panic (wrbpod-alloc-slots wrbpod-session-id u1)))
         (num-slots (unwrap-panic (wrbpod-get-num-slots wrbpod-session-id { name: 0x666f6f, namespace: 0x627463 })))
     )
-        (asserts! (is-eq wrbpod-session-id u1) (err "Did not open"))
+        (asserts! (is-eq wrbpod-session-id u0) (err "Did not open"))
         (asserts! wrbpod-alloc-success (err "Successful allocation failed"))
         (asserts! (is-eq num-slots u1) (err "Allocation failed"))
     )
    
     ;; put a slice
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod, slot: u0 })))
         (fetchslot-res (wrbpod-fetch-slot wrbpod-session-id u0))
         (putslice-res (wrbpod-put-slice wrbpod-session-id u0 u0 0x001122334455))
         (getslice-res (wrbpod-get-slice wrbpod-session-id u0 u0))
@@ -229,7 +229,7 @@ fn test_wrbpod_sync_slot() {
 
     ;; store the modified slot
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod, slot: u0 })))
         (sync-res (wrbpod-sync-slot wrbpod-session-id u0))
     )
         (asserts! (is-ok sync-res) (err "failed to sync"))
@@ -237,7 +237,7 @@ fn test_wrbpod_sync_slot() {
 
     ;; idempotent
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod, slot: u0 })))
         (sync-res (wrbpod-sync-slot wrbpod-session-id u0))
     )
         (asserts! (is-ok sync-res) (err "failed to sync"))
@@ -245,7 +245,7 @@ fn test_wrbpod_sync_slot() {
 
     ;; errors
     (let (
-        (wrbpod-session-id (unwrap-panic (wrbpod-open 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod)))
+        (wrbpod-session-id (unwrap-panic (wrbpod-open { contract: 'SP1B62RVBBP8N4K3X4K6AA8FFPXQWGGX48SSEKPAB.wrbpod, slot: u0 })))
     )
         (asserts! (is-err (wrbpod-sync-slot (+ u1 wrbpod-session-id) u0)) (err "synced non-open session"))
         (asserts! (is-err (wrbpod-sync-slot wrbpod-session-id u1)) (err "synced non-open slot"))
@@ -254,7 +254,32 @@ fn test_wrbpod_sync_slot() {
 
     let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
 
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
+    let mut vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
+    let mut renderer = Renderer::new(1_000_000_000);
+    let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
+    println!("text '{}'", &s);
+}
+
+#[test]
+fn test_wrbpod_default() {
+    core::init(true, "localhost", 20443);
+
+    let db_path = "/tmp/wrb-wrbpod-default";
+    if fs::metadata(&db_path).is_ok() {
+        fs::remove_dir_all(&db_path).unwrap();
+    }
+
+    let code = r#"
+    (let (
+        (default-wrbpod-addr (wrbpod-default))
+    )
+        (asserts! (is-eq default-wrbpod-addr { contract: 'SP000000000000000000002Q6VF78.you-need-to-set-up-your-wrbpod, slot: u0 }) (err "Wrong default wrbpod"))
+    )
+    "#;
+
+    let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
+
+    let mut vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
     let mut renderer = Renderer::new(1_000_000_000);
     let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
     println!("text '{}'", &s);

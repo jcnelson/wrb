@@ -370,4 +370,9 @@ impl Viewport {
     pub fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
     }
+
+    /// Clear the inner char buff
+    pub fn clear(&mut self) {
+        self.buff.clear()
+    }
 }

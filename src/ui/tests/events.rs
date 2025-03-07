@@ -87,7 +87,7 @@ fn test_wrb_event_loop_setup() {
     let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
     let linked_code = Renderer::wrb_link(&code);
 
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
+    let mut vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
     let renderer = Renderer::new(1_000_000_000);
 
     let main_code_id = vm.get_code_id();
@@ -144,7 +144,7 @@ fn test_wrb_stateful_event_loop() {
 (wrb-event-subscribe WRB_EVENT_TIMER)
 "#;
 
-    let vm = ClarityVM::new(db_path, "foo.btc").unwrap();
+    let vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
     let renderer = Renderer::new(1_000_000_000);
 
     let (_frames, value_opt) = run_page(
@@ -199,7 +199,7 @@ fn test_render_dynamic_text() {
 (wrb-event-subscribe WRB_EVENT_TIMER)
 "#;
 
-    let vm = ClarityVM::new(db_path, "foo.btc").unwrap();
+    let vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
     let renderer = Renderer::new(1_000_000_000);
 
     let (frames, _value_opt) = run_page(

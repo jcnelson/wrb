@@ -25,6 +25,7 @@ use clarity::vm::types::QualifiedContractIdentifier;
 use libstackerdb::SlotMetadata;
 
 use crate::runner::bns::BNSError;
+use crate::runner::bns::BNSNameOwner;
 use crate::runner::bns::BNSNameRecord;
 use crate::runner::bns::BNSResolver;
 use crate::runner::site::WrbTxtRecord;
@@ -50,6 +51,8 @@ impl BNSNameRecord {
 
 pub struct MockBNSResolver {
     names: HashMap<(String, String), BNSNameRecord>,
+    owners: HashMap<(String, String), BNSNameOwner>,
+    prices: HashMap<(String, String), u128>,
     errors: HashMap<(String, String), BNSError>,
 }
 
@@ -57,6 +60,8 @@ impl MockBNSResolver {
     pub fn new() -> Self {
         Self {
             names: HashMap::new(),
+            owners: HashMap::new(),
+            prices: HashMap::new(),
             errors: HashMap::new(),
         }
     }
@@ -64,6 +69,16 @@ impl MockBNSResolver {
     pub fn add_name_rec(&mut self, name: &str, namespace: &str, name_rec: BNSNameRecord) {
         self.names
             .insert((name.to_string(), namespace.to_string()), name_rec);
+    }
+
+    pub fn add_name_owner(&mut self, name: &str, namespace: &str, name_owner: BNSNameOwner) {
+        self.owners
+            .insert((name.to_string(), namespace.to_string()), name_owner);
+    }
+
+    pub fn add_name_price(&mut self, name: &str, namespace: &str, price: u128) {
+        self.prices
+            .insert((name.to_string(), namespace.to_string()), price);
     }
 
     pub fn add_error(&mut self, name: &str, namespace: &str, error: BNSError) {
@@ -85,6 +100,38 @@ impl BNSResolver for MockBNSResolver {
         };
         if let Some(res) = self.names.get(&key) {
             return Ok(Ok(res.clone()));
+        }
+        return Err(Error::NotConnected);
+    }
+
+    fn get_owner(
+        &mut self,
+        _runner: &mut Runner,
+        name: &str,
+        namespace: &str,
+    ) -> Result<Option<BNSNameOwner>, Error> {
+        let key = (name.to_string(), namespace.to_string());
+        if let Some(_err) = self.errors.get(&key) {
+            return Ok(None);
+        };
+        if let Some(res) = self.owners.get(&key) {
+            return Ok(Some(res.clone()));
+        }
+        return Err(Error::NotConnected);
+    }
+
+    fn get_price(
+        &mut self,
+        _runner: &mut Runner,
+        name: &str,
+        namespace: &str,
+    ) -> Result<Option<u128>, Error> {
+        let key = (name.to_string(), namespace.to_string());
+        if let Some(_err) = self.errors.get(&key) {
+            return Ok(None);
+        };
+        if let Some(res) = self.prices.get(&key) {
+            return Ok(Some(res.clone()));
         }
         return Err(Error::NotConnected);
     }

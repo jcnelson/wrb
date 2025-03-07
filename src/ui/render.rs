@@ -124,8 +124,6 @@ impl Renderer {
         code_id: &QualifiedContractIdentifier,
         code: &str,
     ) -> Result<(), Error> {
-        let mainnet = wrb_tx.mainnet();
-
         wrb_test_debug!("main (linked) code = '{}'", code);
         let mut main_exprs = clarity_parse(code_id, &code)?;
 
@@ -148,8 +146,7 @@ impl Renderer {
 
         let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
         db.begin();
-        let mut vm_env =
-            OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+        let mut vm_env = OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
         vm_env.initialize_versioned_contract(
             code_id.clone(),
             DEFAULT_WRB_CLARITY_VERSION,

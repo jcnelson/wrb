@@ -109,6 +109,7 @@ impl WrbForm for RawText {
         })
     }
 
+    // No state to store for raw text
     fn to_clarity_value(&self) -> Result<Option<Value>, Error> {
         Ok(None)
     }

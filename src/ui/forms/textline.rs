@@ -193,9 +193,16 @@ impl WrbForm for TextLine {
         })
     }
 
+    /// Return the actionable data
     fn to_clarity_value(&self) -> Result<Option<Value>, Error> {
-        // TODO
-        Ok(None)
+        let value_opt = Value::string_utf8_from_string_utf8_literal(self.inner_text.clone())
+            .map_err(|e| {
+                wrb_warn!("Failed to convert inner text of textline element {} in viewport {} into a Clarity value: {:?}", self.element_id, self.viewport_id, &e);
+                e
+            })
+            .ok();
+
+        Ok(value_opt)
     }
 
     fn render(&mut self, root: &mut Root, _cursor: (u64, u64)) -> Result<(u64, u64), Error> {

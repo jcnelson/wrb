@@ -76,11 +76,6 @@ const KV_SCHEMA: &'static [&'static str] = &[
     r#"
     INSERT INTO schema_version (version) VALUES (1);
     "#,
-    r#"
-    CREATE TABLE IF NOT EXISTS wrb_config(
-        mainnet BOOLEAN NOT NULL
-    );
-    "#,
 ];
 
 /// Get the height of a block hash, without regards to the open chain tip
@@ -272,7 +267,6 @@ impl WrbDB {
             domain: domain.to_string(),
             conn,
             chain_tip,
-            mainnet: true,
             created,
         })
     }
@@ -313,7 +307,6 @@ impl WrbDB {
             chain_tip,
             tip_height,
             conn: &self.conn,
-            mainnet: self.mainnet,
         }
     }
 
@@ -354,7 +347,6 @@ impl WrbDB {
             next_tip: next.clone(),
             write_buf: WriteBuffer::new(),
             tx: tx,
-            mainnet: self.mainnet,
         }
     }
 
@@ -460,10 +452,6 @@ impl<'a> ReadOnlyWrbStore<'a> {
 
     pub fn as_analysis_db<'b>(&'b mut self) -> AnalysisDatabase<'b> {
         AnalysisDatabase::new(self)
-    }
-
-    pub fn mainnet(&self) -> bool {
-        self.mainnet
     }
 }
 
@@ -670,10 +658,6 @@ impl<'a> WritableWrbStore<'a> {
 
     pub fn rollback_block(self) {
         // no-op for now
-    }
-
-    pub fn mainnet(&self) -> bool {
-        self.mainnet
     }
 }
 

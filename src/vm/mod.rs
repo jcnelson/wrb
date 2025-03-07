@@ -58,9 +58,9 @@ pub trait ClarityStorage {
 
 pub struct ClarityVM {
     db: WrbDB,
-    mainnet: bool,
     app_name: String,
     app_namespace: String,
+    app_version: u32,
 }
 
 #[derive(Debug)]

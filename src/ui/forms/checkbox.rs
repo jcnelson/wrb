@@ -228,42 +228,17 @@ impl WrbForm for Checkbox {
     }
 
     /// Store back to a Clarity value.
-    /// Used to send back the state of this UI element to the wrbsite
+    /// Only returns the actionable data.
     fn to_clarity_value(&self) -> Result<Option<Value>, Error> {
-        let value = Value::Tuple(
-            TupleData::from_data(vec![
-                ("row".into(), Value::UInt(u128::from(self.row))),
-                ("col".into(), Value::UInt(u128::from(self.col))),
-                ("bg-color".into(), self.bg_color.to_clarity_value()),
-                ("fg-color".into(), self.fg_color.to_clarity_value()),
-                (
-                    "focused-bg-color".into(),
-                    self.focused_bg_color.to_clarity_value(),
-                ),
-                (
-                    "focused-fg-color".into(),
-                    self.focused_fg_color.to_clarity_value(),
-                ),
-                (
-                    "selector-color".into(),
-                    self.selector_color.to_clarity_value(),
-                ),
-                ("element-id".into(), Value::UInt(self.element_id)),
-                (
-                    "options".into(),
-                    Value::cons_list(
-                        self.options
-                            .clone()
-                            .into_iter()
-                            .map(|val| val.to_clarity_value())
-                            .collect(),
-                        &DEFAULT_WRB_EPOCH,
-                    )
-                    .expect("FATAL: failed to encode checkbox options list"),
-                ),
-            ])
-            .expect("FATAL: failed to convert checkbox into Clarity value"),
-        );
+        let value = Value::cons_list(
+            self.options
+                .clone()
+                .into_iter()
+                .map(|val| val.to_clarity_value())
+                .collect(),
+            &DEFAULT_WRB_EPOCH,
+        )
+        .expect("FATAL: failed to encode checkbox options list");
         Ok(Some(value))
     }
 

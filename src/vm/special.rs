@@ -24,12 +24,14 @@ use crate::runner::Runner;
 
 use crate::storage::Wrbpod;
 
+use crate::core::make_runner;
 use crate::core::with_global_config;
 use crate::core::with_globals;
 
 use crate::util::privkey_to_principal;
 
 use crate::storage::Error as WrbpodError;
+use crate::storage::WrbpodAddress;
 
 use crate::vm::WRB_CONTRACT;
 use crate::vm::WRB_LOW_LEVEL_CONTRACT;
@@ -52,6 +54,24 @@ use stacks_common::types::chainstate::StacksPrivateKey;
 use stacks_common::util::hash::{to_hex, Hash160};
 
 use crate::runner::stackerdb::StackerDBSession;
+
+pub const WRB_ERROR_INFALLIBLE: u128 = 0;
+pub const WRB_ERR_INVALID: u128 = 1;
+
+pub const WRB_ERR_WRBPOD_NOT_OPEN: u128 = 1000;
+pub const WRB_ERR_WRBPOD_NO_SLOT: u128 = 1001;
+pub const WRB_ERR_WRBPOD_NO_SLICE: u128 = 1002;
+pub const WRB_ERR_WRBPOD_OPEN_FAILURE: u128 = 1003;
+pub const WRB_ERR_WRBPOD_SLOT_ALLOC_FAILURE: u128 = 1004;
+pub const WRB_ERR_WRBPOD_FETCH_SLOT_FAILURE: u128 = 1005;
+pub const WRB_ERR_WRBPOD_PUT_SLICE_FAILURE: u128 = 1006;
+pub const WRB_ERR_WRBPOD_SYNC_SLOT_FAILURE: u128 = 1007;
+
+pub const WRB_ERR_READONLY_FAILURE: u128 = 2000;
+
+pub const WRB_ERR_BUFF_TO_UTF8_FAILURE: u128 = 3000;
+
+pub const WRB_ERR_STRING_ASCII_TO_STRING_UTF8_FAILURE: u128 = 4000;
 
 fn env_with_global_context<F, A, E>(
     global_context: &mut GlobalContext,
@@ -82,13 +102,20 @@ where
     result
 }
 
-/// Make an (err (string-ascii 512))
-fn err_ascii_512(msg: &str) -> Value {
-    Value::error(
-        Value::string_ascii_from_bytes(msg.as_bytes().to_vec())
-            .expect("FATAL: failed to construct value from string-ascii"),
-    )
-    .expect("FATAL: failed to construct error from ascii")
+/// Make an (err { code: uint, message: (string-ascii 512) })
+fn err_ascii_512(code: u128, msg: &str) -> Value {
+    Value::error(Value::Tuple(
+        TupleData::from_data(vec![
+            ("code".into(), Value::UInt(code)),
+            (
+                "message".into(),
+                Value::string_ascii_from_bytes(msg.as_bytes().to_vec())
+                    .expect("FATAL: failed to construct value from string-ascii"),
+            ),
+        ])
+        .expect("FATAL: failed to build valid tuple"),
+    ))
+    .expect("FATAL: failed to construct error tuple")
 }
 
 /// Trampoline code for contract-call to `.wrb call-readonly`
@@ -147,7 +174,10 @@ fn handle_wrb_call_readonly(
     // carry out the RPC
     let value = match runner.call_readonly(&target_contract_id, &function_name, &args) {
         Ok(value) => Value::okay(Value::buff_from(value.serialize_to_vec()?).unwrap()).unwrap(),
-        Err(e) => err_ascii_512(&format!("wrb: failed call-readonly: {:?}", &e)),
+        Err(e) => err_ascii_512(
+            WRB_ERR_READONLY_FAILURE,
+            &format!("wrb: failed call-readonly: {:?}", &e),
+        ),
     };
 
     env_with_global_context(
@@ -190,7 +220,10 @@ fn handle_buff_to_string_utf8(
     let value = match std::str::from_utf8(&hex_buff) {
         Ok(s) => Value::okay(Value::string_utf8_from_string_utf8_literal(s.to_string()).unwrap())
             .unwrap(),
-        Err(e) => err_ascii_512(&format!("wrb: failed to decode to utf-8: {:?}", &e)),
+        Err(e) => err_ascii_512(
+            WRB_ERR_BUFF_TO_UTF8_FAILURE,
+            &format!("wrb: failed to decode buffer to UTF-8: {:?}", &e),
+        ),
     };
 
     env_with_global_context(
@@ -211,15 +244,14 @@ fn handle_buff_to_string_utf8(
     Ok(())
 }
 
-/// Trampoline code for contract-call to `.wrb wrbpod-open`
-pub fn handle_wrbpod_open(
+/// Trampoline code for contract-call to `.wrb string-ascii-to-string-utf8`
+fn handle_string_ascii_to_string_utf8(
     global_context: &mut GlobalContext,
     sender: PrincipalData,
     sponsor: Option<PrincipalData>,
     contract_id: &QualifiedContractIdentifier,
     args: &[Value],
     wrb_lowlevel_contract: Contract,
-    result: &Value,
 ) -> Result<(), Error> {
     // must be one argument
     if args.len() != 1 {
@@ -230,112 +262,129 @@ pub fn handle_wrbpod_open(
         .into());
     }
 
-    let contract_principal = args[0].clone().expect_principal()?;
-    let PrincipalData::Contract(wrbpod_contract_id) = contract_principal else {
+    let ascii_str = args[0].clone().expect_ascii()?;
+    let value = if ascii_str.len() < 25600 {
+        Value::okay(Value::string_utf8_from_string_utf8_literal(ascii_str).unwrap()).unwrap()
+    } else {
+        err_ascii_512(
+            WRB_ERR_STRING_ASCII_TO_STRING_UTF8_FAILURE,
+            "wrb: failed to convert ASCII to UTF-8: too big",
+        )
+    };
+
+    env_with_global_context(
+        global_context,
+        sender,
+        sponsor,
+        wrb_lowlevel_contract.contract_context,
+        |env| {
+            env.execute_contract_allow_private(
+                contract_id,
+                "set-last-wrb-string-ascii-to-string-utf8",
+                &[SymbolicExpression::atom_value(value)],
+                false,
+            )
+        },
+    )
+    .expect("FATAL: failed to set last wrb-to-utf8 request");
+    Ok(())
+}
+
+/// Trampoline code for contract-call to `.wrb wrbpod-default`
+pub fn handle_wrbpod_default(
+    global_context: &mut GlobalContext,
+    sender: PrincipalData,
+    sponsor: Option<PrincipalData>,
+    contract_id: &QualifiedContractIdentifier,
+    args: &[Value],
+    wrb_lowlevel_contract: Contract,
+) -> Result<(), Error> {
+    // no args
+    if args.len() != 0 {
         return Err(InterpreterError::InterpreterError(format!(
-            "Expected a contract principal for wrbpod-open",
+            "Expected 0 arguments, got {}",
+            args.len()
+        ))
+        .into());
+    }
+
+    let default_superblock =
+        with_global_config(|cfg| cfg.default_wrbpod().clone()).expect("System is not initialized");
+
+    let default_superblock_value = Value::Tuple(
+        TupleData::from_data(vec![
+            (
+                "contract".into(),
+                Value::Principal(default_superblock.contract.clone().into()),
+            ),
+            ("slot".into(), Value::UInt(default_superblock.slot.into())),
+        ])
+        .unwrap(),
+    );
+
+    env_with_global_context(
+        global_context,
+        sender,
+        sponsor,
+        wrb_lowlevel_contract.contract_context,
+        |env| {
+            env.execute_contract_allow_private(
+                contract_id,
+                "finish-wrbpod-default",
+                &[SymbolicExpression::atom_value(default_superblock_value)],
+                false,
+            )
+        },
+    )
+    .expect("FATAL: failed to set default wrbpod");
+    Ok(())
+}
+
+/// Trampoline code for contract-call to `.wrb wrbpod-open`
+pub fn handle_wrbpod_open(
+    global_context: &mut GlobalContext,
+    sender: PrincipalData,
+    sponsor: Option<PrincipalData>,
+    contract_id: &QualifiedContractIdentifier,
+    args: &[Value],
+    wrb_lowlevel_contract: Contract,
+) -> Result<(), Error> {
+    // must be one argument
+    if args.len() != 1 {
+        return Err(InterpreterError::InterpreterError(format!(
+            "Expected 1 argument, got {}",
+            args.len()
+        ))
+        .into());
+    }
+
+    let superblock_tuple = args[0].clone().expect_tuple()?;
+    let PrincipalData::Contract(wrbpod_contract_id) = superblock_tuple
+        .get("contract")
+        .expect("FATAL: missing `contract` in wrbpod superblock")
+        .clone()
+        .expect_principal()?
+    else {
+        return Err(InterpreterError::InterpreterError(format!(
+            "Expected a contract principal for wrbpod-open superblock tuple",
         ))
         .into());
     };
 
-    match result.clone().expect_result()? {
-        Ok(ok_value) => {
-            let session_id_opt = ok_value.expect_optional()?;
-            if session_id_opt.is_some() {
-                // this wrbpod is already open
-                wrb_debug!("Wrbpod already open: {}", &wrbpod_contract_id);
-                return Ok(());
-            }
-        }
-        Err(..) => {
-            // this failed, so do nothing
-            return Ok(());
-        }
-    }
+    let wrbpod_slot_id = superblock_tuple
+        .get("slot")
+        .expect("FATAL: missing `slot` in wrbpod superblock")
+        .clone()
+        .expect_u128()?;
 
-    let (node_host, node_port) =
-        with_global_config(|cfg| cfg.get_node_addr()).expect("FATAL: system not initialized");
-    let bns_contract_id =
-        with_global_config(|cfg| cfg.get_bns_contract_id()).expect("FATAL: system not initialized");
-    let mut runner = Runner::new(bns_contract_id, node_host, node_port);
-
-    // is this an owned wrbpod? only true if the client's identity private key matches the target
-    // contract.
-    let privkey = with_global_config(|cfg| cfg.private_key().clone()).ok_or(
-        InterpreterError::InterpreterError(format!("System is not initialized")),
-    )?;
-
-    let key_principal = privkey_to_principal(&privkey, wrbpod_contract_id.issuer.version());
-    let owned = key_principal == wrbpod_contract_id.issuer;
-
-    // go set up the wrbpod session
-    let home_stackerdb_client = runner
-        .get_home_stackerdb_client(wrbpod_contract_id.clone(), privkey.clone())
-        .map_err(|e| {
-            Error::Interpreter(
-                InterpreterError::InterpreterError(format!(
-                    "Unable to connect to home node: {:?}",
-                    &e
-                ))
-                .into(),
-            )
-        })?;
-
-    let replica_stackerdb_client = runner
-        .get_replica_stackerdb_client(wrbpod_contract_id.clone(), privkey.clone())
-        .map_err(|e| {
-            Error::Interpreter(
-                InterpreterError::InterpreterError(format!(
-                    "Unable to connect to replica node: {:?}",
-                    &e
-                ))
-                .into(),
-            )
-        })?;
-
-    let wrbpod_session_result = Wrbpod::open(
-        home_stackerdb_client,
-        replica_stackerdb_client,
-        privkey.clone(),
-    )
-    .map_err(|e| {
-        format!(
-            "Failed to open wrbpod session to {}: {:?}",
-            &wrbpod_contract_id, &e
-        )
-    });
-
-    match wrbpod_session_result {
-        Ok(wrbpod_session) => {
-            let result = Value::okay(Value::Bool(owned)).unwrap();
-            let session_id_res = env_with_global_context(
-                global_context,
-                sender,
-                sponsor,
-                wrb_lowlevel_contract.contract_context,
-                |env| {
-                    env.execute_contract_allow_private(
-                        contract_id,
-                        "finish-wrbpod-open",
-                        &[
-                            SymbolicExpression::atom_value(args[0].clone()),
-                            SymbolicExpression::atom_value(result),
-                        ],
-                        false,
-                    )
-                },
-            )?;
-
-            if let Ok(session_id_value) = session_id_res.expect_result()? {
-                let session_id = session_id_value.expect_u128()?;
-                with_globals(|globals| globals.add_wrbpod_session(session_id, wrbpod_session));
-            }
-        }
-        Err(e) => {
-            let result = err_ascii_512(&format!(
-                "wrb: failed to open wrbpod session to {}: {:?}",
-                &wrbpod_contract_id, &e
-            ));
+    let wrbpod_slot_id: u32 = match wrbpod_slot_id.try_into() {
+        Ok(x) => x,
+        Err(_) => {
+            wrb_warn!("Invalid wrbpod superblock slot ID {}", wrbpod_slot_id);
+            let result = err_ascii_512(
+                WRB_ERR_WRBPOD_OPEN_FAILURE,
+                "wrb: invalid superblock slot ID. Must be 32-bit.".into(),
+            );
             env_with_global_context(
                 global_context,
                 sender,
@@ -347,6 +396,219 @@ pub fn handle_wrbpod_open(
                         "finish-wrbpod-open",
                         &[
                             SymbolicExpression::atom_value(args[0].clone()),
+                            SymbolicExpression::atom_value(Value::UInt(0)),
+                            SymbolicExpression::atom_value(result),
+                        ],
+                        false,
+                    )
+                },
+            )?;
+            return Ok(());
+        }
+    };
+
+    let wrbpod_addr = WrbpodAddress {
+        contract: wrbpod_contract_id.clone(),
+        slot: wrbpod_slot_id,
+    };
+
+    // is this an owned wrbpod? only true if the client's identity private key matches the target
+    // contract.
+    let privkey = with_global_config(|cfg| cfg.private_key().clone()).ok_or(
+        InterpreterError::InterpreterError(format!("System is not initialized")),
+    )?;
+
+    let key_principal = privkey_to_principal(&privkey, wrbpod_contract_id.issuer.version());
+    let owned = key_principal == wrbpod_contract_id.issuer;
+
+    wrb_debug!(
+        "Will open wrbpod {} (owned? {})",
+        &wrbpod_contract_id,
+        owned
+    );
+
+    let opened_session_id =
+        with_globals(|globals| globals.get_wrbpod_session_id_by_address(&wrbpod_addr));
+    if let Some(wrbpod_session_id) = opened_session_id {
+        // this wrbpod is already open, so complete the opening
+        wrb_debug!(
+            "Wrbpod {} already open: session ID {}",
+            &wrbpod_contract_id,
+            wrbpod_session_id
+        );
+        let result = Value::okay(Value::Bool(owned)).unwrap();
+        env_with_global_context(
+            global_context,
+            sender,
+            sponsor,
+            wrb_lowlevel_contract.contract_context,
+            |env| {
+                env.execute_contract_allow_private(
+                    contract_id,
+                    "finish-wrbpod-open",
+                    &[
+                        SymbolicExpression::atom_value(args[0].clone()),
+                        SymbolicExpression::atom_value(Value::UInt(wrbpod_session_id)),
+                        SymbolicExpression::atom_value(result),
+                    ],
+                    false,
+                )
+            },
+        )?;
+        return Ok(());
+    }
+
+    let mut runner = make_runner();
+
+    // go set up the wrbpod session
+    let home_stackerdb_client =
+        match runner.get_home_stackerdb_client(wrbpod_contract_id.clone(), privkey.clone()) {
+            Ok(client) => client,
+            Err(e) => {
+                wrb_warn!(
+                    "Failed to open home StackerDB client for {}: {:?}",
+                    &wrbpod_contract_id,
+                    &e
+                );
+                let result = err_ascii_512(
+                    WRB_ERR_WRBPOD_OPEN_FAILURE,
+                    &format!(
+                        "wrb: failed to open home StackerDB client for {}: {:?}",
+                        &wrbpod_contract_id, &e
+                    ),
+                );
+                env_with_global_context(
+                    global_context,
+                    sender,
+                    sponsor,
+                    wrb_lowlevel_contract.contract_context,
+                    |env| {
+                        env.execute_contract_allow_private(
+                            contract_id,
+                            "finish-wrbpod-open",
+                            &[
+                                SymbolicExpression::atom_value(args[0].clone()),
+                                SymbolicExpression::atom_value(Value::UInt(0)),
+                                SymbolicExpression::atom_value(result),
+                            ],
+                            false,
+                        )
+                    },
+                )?;
+                return Ok(());
+            }
+        };
+
+    let replica_stackerdb_client =
+        match runner.get_replica_stackerdb_client(wrbpod_contract_id.clone(), privkey.clone()) {
+            Ok(client) => client,
+            Err(e) => {
+                wrb_warn!(
+                    "Failed to open replica StackerDB client for {}: {:?}",
+                    &wrbpod_contract_id,
+                    &e
+                );
+                let result = err_ascii_512(
+                    WRB_ERR_WRBPOD_OPEN_FAILURE,
+                    &format!(
+                        "wrb: failed to open replica StackerDB client for {}: {:?}",
+                        &wrbpod_contract_id, &e
+                    ),
+                );
+                env_with_global_context(
+                    global_context,
+                    sender,
+                    sponsor,
+                    wrb_lowlevel_contract.contract_context,
+                    |env| {
+                        env.execute_contract_allow_private(
+                            contract_id,
+                            "finish-wrbpod-open",
+                            &[
+                                SymbolicExpression::atom_value(args[0].clone()),
+                                SymbolicExpression::atom_value(Value::UInt(0)),
+                                SymbolicExpression::atom_value(result),
+                            ],
+                            false,
+                        )
+                    },
+                )?;
+                return Ok(());
+            }
+        };
+
+    let wrbpod_session_result = Wrbpod::open(
+        home_stackerdb_client,
+        replica_stackerdb_client,
+        privkey.clone(),
+        wrbpod_slot_id,
+    )
+    .map_err(|e| {
+        let msg = format!(
+            "Failed to open wrbpod session to {}: {:?}",
+            &wrbpod_contract_id, &e
+        );
+        wrb_warn!("{}", &msg);
+        msg
+    });
+
+    match wrbpod_session_result {
+        Ok(wrbpod_session) => {
+            let result = Value::okay(Value::Bool(owned)).unwrap();
+            let wrbpod_session_id = with_globals(|globals| globals.next_wrbpod_session_id());
+            env_with_global_context(
+                global_context,
+                sender,
+                sponsor,
+                wrb_lowlevel_contract.contract_context,
+                |env| {
+                    env.execute_contract_allow_private(
+                        contract_id,
+                        "finish-wrbpod-open",
+                        &[
+                            SymbolicExpression::atom_value(args[0].clone()),
+                            SymbolicExpression::atom_value(Value::UInt(wrbpod_session_id)),
+                            SymbolicExpression::atom_value(result),
+                        ],
+                        false,
+                    )
+                },
+            )?;
+
+            with_globals(|globals| {
+                globals.add_wrbpod_session(wrbpod_session_id, wrbpod_addr.clone(), wrbpod_session)
+            });
+            wrb_info!(
+                "Opened wrbpod session {} on {}",
+                wrbpod_session_id,
+                &wrbpod_contract_id
+            );
+        }
+        Err(e) => {
+            let result = err_ascii_512(
+                WRB_ERR_WRBPOD_OPEN_FAILURE,
+                &format!(
+                    "wrb: failed to open wrbpod session to {}: {:?}",
+                    &wrbpod_contract_id, &e
+                ),
+            );
+            wrb_warn!(
+                "Failed to open wrbpod session to {}: {:?}",
+                &wrbpod_contract_id,
+                &e
+            );
+            env_with_global_context(
+                global_context,
+                sender,
+                sponsor,
+                wrb_lowlevel_contract.contract_context,
+                |env| {
+                    env.execute_contract_allow_private(
+                        contract_id,
+                        "finish-wrbpod-open",
+                        &[
+                            SymbolicExpression::atom_value(args[0].clone()),
+                            SymbolicExpression::atom_value(Value::UInt(0)),
                             SymbolicExpression::atom_value(result),
                         ],
                         false,
@@ -385,6 +647,7 @@ pub fn handle_wrbpod_get_num_slots(
         .expect_buff(48)?;
 
     let app_name_str = str::from_utf8(&app_name_buff).map_err(|_e| {
+        wrb_warn!("Failed to decode name buffer to string");
         Error::Interpreter(InterpreterError::InterpreterError(format!(
             "Unable to convert name {:?} to UTF-8",
             &app_name_buff
@@ -398,6 +661,7 @@ pub fn handle_wrbpod_get_num_slots(
         .expect_buff(20)?;
 
     let app_namespace_str = str::from_utf8(&app_namespace_buff).map_err(|_e| {
+        wrb_warn!("Failed to decode namespace buffer to string");
         Error::Interpreter(InterpreterError::InterpreterError(format!(
             "Unable to convert namespace {:?} to UTF-8",
             &app_name_tuple
@@ -407,6 +671,7 @@ pub fn handle_wrbpod_get_num_slots(
     let app_name = format!("{}.{}", &app_name_str, &app_namespace_str);
     let num_slots_res = with_globals(|globals| {
         let Some(wrbpod) = globals.get_wrbpod_session(session_id) else {
+            wrb_warn!("No such wrbpod session {}", session_id);
             return Err("no such wrbpod session".to_string());
         };
         Ok(wrbpod.get_num_slots(&app_name))
@@ -414,7 +679,14 @@ pub fn handle_wrbpod_get_num_slots(
 
     let result = match num_slots_res {
         Ok(num_slots) => Value::okay(Value::UInt(num_slots.into())).unwrap(),
-        Err(msg) => err_ascii_512(&msg),
+        Err(msg) => {
+            wrb_warn!(
+                "Failed to query number of slots for '{}': {}",
+                &app_name,
+                &msg
+            );
+            err_ascii_512(WRB_ERR_WRBPOD_NOT_OPEN, &msg)
+        }
     };
 
     env_with_global_context(
@@ -436,6 +708,7 @@ pub fn handle_wrbpod_get_num_slots(
 }
 
 /// decode the result to a call to `get-app-name`
+/// omits the version
 fn load_app_name(
     global_context: &mut GlobalContext,
     sender: PrincipalData,
@@ -540,6 +813,7 @@ pub fn handle_wrbpod_alloc_slots(
                     contract_id,
                     "set-last-wrbpod-alloc-slots-result",
                     &[SymbolicExpression::atom_value(err_ascii_512(
+                        WRB_ERR_INVALID,
                         "too many slots",
                     ))],
                     false,
@@ -567,7 +841,7 @@ pub fn handle_wrbpod_alloc_slots(
     // allocate the slots
     let alloc_res = with_globals(|globals| {
         let Some(wrbpod) = globals.get_wrbpod_session(session_id) else {
-            return Err("No such session".to_string());
+            return Err(format!("No such session {}", session_id));
         };
         wrbpod
             .allocate_slots(&format!("{}.{}", &name, &namespace), code_hash, num_slots)
@@ -576,7 +850,7 @@ pub fn handle_wrbpod_alloc_slots(
 
     let alloc_res_value = match alloc_res {
         Ok(res) => Value::okay(Value::Bool(res)).unwrap(),
-        Err(msg) => err_ascii_512(&msg),
+        Err(msg) => err_ascii_512(WRB_ERR_WRBPOD_SLOT_ALLOC_FAILURE, &msg),
     };
 
     env_with_global_context(
@@ -632,7 +906,10 @@ pub fn handle_wrbpod_fetch_slot(
                     &[
                         SymbolicExpression::atom_value(Value::UInt(session_id)),
                         SymbolicExpression::atom_value(Value::UInt(args[1].clone().expect_u128()?)),
-                        SymbolicExpression::atom_value(err_ascii_512("app slot is too big".into())),
+                        SymbolicExpression::atom_value(err_ascii_512(
+                            WRB_ERR_INVALID,
+                            "app slot is too big".into(),
+                        )),
                     ],
                     false,
                 )
@@ -653,10 +930,11 @@ pub fn handle_wrbpod_fetch_slot(
     let fetch_res = with_globals(|globals| {
         let Some(wrbpod) = globals.get_wrbpod_session(session_id) else {
             wrb_warn!(
-                "wrbpod.fetch_chunk({}.{}, {}): no such session",
+                "wrbpod.fetch_chunk({}.{}, {}): no such session {}",
                 &name,
                 &namespace,
-                app_slot_id
+                app_slot_id,
+                session_id,
             );
             return Err("no such session".to_string());
         };
@@ -690,7 +968,7 @@ pub fn handle_wrbpod_fetch_slot(
             .unwrap(),
         ))
         .unwrap(),
-        Err(msg) => err_ascii_512(&msg),
+        Err(msg) => err_ascii_512(WRB_ERR_WRBPOD_FETCH_SLOT_FAILURE, &msg),
     };
 
     env_with_global_context(
@@ -752,7 +1030,10 @@ pub fn handle_wrbpod_get_slice(
                         SymbolicExpression::atom_value(Value::UInt(session_id)),
                         SymbolicExpression::atom_value(Value::UInt(args[1].clone().expect_u128()?)),
                         SymbolicExpression::atom_value(Value::UInt(slice_id)),
-                        SymbolicExpression::atom_value(err_ascii_512("app slot is too big".into())),
+                        SymbolicExpression::atom_value(err_ascii_512(
+                            WRB_ERR_INVALID,
+                            "app slot is too big".into(),
+                        )),
                     ],
                     false,
                 )
@@ -773,10 +1054,11 @@ pub fn handle_wrbpod_get_slice(
     let slice_res = with_globals(|globals| {
         let Some(wrbpod) = globals.get_wrbpod_session(session_id) else {
             wrb_warn!(
-                "wrbpod.get_slice({}.{}, {}): no such session",
+                "wrbpod.get_slice({}.{}, {}): no such session {}",
                 &name,
                 &namespace,
-                app_slot_id
+                app_slot_id,
+                session_id
             );
             return Err("no such session".to_string());
         };
@@ -794,7 +1076,7 @@ pub fn handle_wrbpod_get_slice(
 
     let slice_res_value = match slice_res {
         Ok(bytes) => Value::okay(Value::buff_from(bytes).unwrap()).unwrap(),
-        Err(msg) => err_ascii_512(&msg),
+        Err(msg) => err_ascii_512(WRB_ERR_WRBPOD_NO_SLICE, &msg),
     };
 
     env_with_global_context(
@@ -843,7 +1125,7 @@ pub fn handle_wrbpod_put_slice(
     let session_id = args[0].clone().expect_u128()?;
     let slice_id = args[2].clone().expect_u128()?;
     let Ok(app_slot_id) = u32::try_from(args[1].clone().expect_u128()?) else {
-        wrb_warn!("app slot is too big");
+        wrb_warn!("wrbpod-put-slice: app slot is too big");
         env_with_global_context(
             global_context,
             sender,
@@ -857,7 +1139,10 @@ pub fn handle_wrbpod_put_slice(
                         SymbolicExpression::atom_value(Value::UInt(session_id)),
                         SymbolicExpression::atom_value(Value::UInt(args[1].clone().expect_u128()?)),
                         SymbolicExpression::atom_value(Value::UInt(slice_id)),
-                        SymbolicExpression::atom_value(err_ascii_512("app slot is too big".into())),
+                        SymbolicExpression::atom_value(err_ascii_512(
+                            WRB_ERR_INVALID,
+                            "app slot is too big".into(),
+                        )),
                     ],
                     false,
                 )
@@ -879,10 +1164,11 @@ pub fn handle_wrbpod_put_slice(
     let put_res = with_globals(|globals| {
         let Some(wrbpod) = globals.get_wrbpod_session(session_id) else {
             wrb_warn!(
-                "wrbpod.put_slice({}.{}, {}): no such session",
+                "wrbpod-put-slice({}.{}, {}): no such session {}",
                 &name,
                 &namespace,
-                app_slot_id
+                app_slot_id,
+                session_id
             );
             return Err("no such session".to_string());
         };
@@ -896,7 +1182,7 @@ pub fn handle_wrbpod_put_slice(
 
     let put_res_value = match put_res {
         Ok(put_res) => Value::okay(Value::Bool(put_res)).unwrap(),
-        Err(msg) => err_ascii_512(&msg),
+        Err(msg) => err_ascii_512(WRB_ERR_WRBPOD_PUT_SLICE_FAILURE, &msg),
     };
 
     env_with_global_context(
@@ -955,7 +1241,10 @@ pub fn handle_wrbpod_sync_slot(
                     &[
                         SymbolicExpression::atom_value(Value::UInt(session_id)),
                         SymbolicExpression::atom_value(Value::UInt(args[1].clone().expect_u128()?)),
-                        SymbolicExpression::atom_value(err_ascii_512("app slot is too big".into())),
+                        SymbolicExpression::atom_value(err_ascii_512(
+                            WRB_ERR_INVALID,
+                            "app slot is too big".into(),
+                        )),
                     ],
                     false,
                 )
@@ -993,7 +1282,7 @@ pub fn handle_wrbpod_sync_slot(
 
     let res_val = match res {
         Ok(_) => Value::okay(Value::Bool(true)).unwrap(),
-        Err(msg) => err_ascii_512(&msg),
+        Err(msg) => err_ascii_512(WRB_ERR_WRBPOD_SYNC_SLOT_FAILURE, &msg),
     };
 
     env_with_global_context(
@@ -1028,16 +1317,14 @@ pub fn handle_wrb_contract_call_special_cases(
     result: &Value,
 ) -> Result<(), Error> {
     wrb_debug!(
-        "Run special-case handler for {}.{}",
+        "Run special-case handler for {}.{}: {:?} --> {:?}",
         contract_id,
-        function_name
+        function_name,
+        args,
+        result
     );
-    if *contract_id == boot_code_id(WRB_LOW_LEVEL_CONTRACT, global_context.mainnet) {
-        let (node_host, node_port) =
-            with_global_config(|cfg| cfg.get_node_addr()).expect("FATAL: system not initialized");
-        let bns_contract_id = with_global_config(|cfg| cfg.get_bns_contract_id())
-            .expect("FATAL: system not initialized");
-        let runner = Runner::new(bns_contract_id, node_host, node_port);
+    if *contract_id == boot_code_id(WRB_LOW_LEVEL_CONTRACT, true) {
+        let runner = make_runner();
         let sender = match sender {
             Some(s) => s.clone(),
             None => boot_code_addr(true).into(),
@@ -1070,6 +1357,26 @@ pub fn handle_wrb_contract_call_special_cases(
                     wrb_lowlevel_contract,
                 )?;
             }
+            "string-ascii-to-string-utf8" => {
+                handle_string_ascii_to_string_utf8(
+                    global_context,
+                    sender,
+                    sponsor,
+                    contract_id,
+                    args,
+                    wrb_lowlevel_contract,
+                )?;
+            }
+            "wrbpod-default" => {
+                handle_wrbpod_default(
+                    global_context,
+                    sender,
+                    sponsor,
+                    contract_id,
+                    args,
+                    wrb_lowlevel_contract,
+                )?;
+            }
             "wrbpod-open" => {
                 handle_wrbpod_open(
                     global_context,
@@ -1078,7 +1385,6 @@ pub fn handle_wrb_contract_call_special_cases(
                     contract_id,
                     args,
                     wrb_lowlevel_contract,
-                    result,
                 )?;
             }
             "wrbpod-get-num-slots" => {

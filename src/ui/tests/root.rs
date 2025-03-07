@@ -422,7 +422,7 @@ fn test_root_focus_order() {
 "#;
     let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
 
-    let mut vm = ClarityVM::new(db_path, "foo.btc").unwrap();
+    let mut vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
     let renderer = Renderer::new(1_000_000_000);
     let mut root = renderer.eval_root(&mut vm, &bytes).unwrap();
     root.refresh();

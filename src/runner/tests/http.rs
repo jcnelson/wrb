@@ -122,7 +122,7 @@ fn test_decode_http_response_ok() {
 fn test_decode_http_response_err() {
     let tests = vec![
         ("HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 456\r\nFoo: Bar\r\nX-Request-ID: 0\r\n\r\n",
-         Error::HttpError(400)),
+         Error::HttpError(400, HashMap::new(), 0)),
         ("HTTP/1.1 200",
          Error::Deserialize("".to_string())),
         ("HTTP/1.1 200 OK\r\nfoo: \u{2764}\r\n\r\n",
@@ -134,7 +134,7 @@ fn test_decode_http_response_err() {
     for (data, expected_err_type) in tests.iter() {
         let err_type = decode_http_response(data.as_bytes()).unwrap_err();
         match (err_type, expected_err_type) {
-            (Error::HttpError(x), Error::HttpError(y)) => assert_eq!(x, *y),
+            (Error::HttpError(x, _, _), Error::HttpError(y, _, _)) => assert_eq!(x, *y),
             (Error::Deserialize(_), Error::Deserialize(_)) => {}
             (Error::MalformedResponse(_), Error::MalformedResponse(_)) => {}
             (x, y) => {

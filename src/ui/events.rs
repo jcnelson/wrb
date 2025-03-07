@@ -266,11 +266,10 @@ impl Renderer {
         main_code_id: &QualifiedContractIdentifier,
     ) -> Result<Option<String>, Error> {
         let event_loop_name = {
-            let mainnet = wrb_tx.mainnet();
             let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
             db.begin();
             let mut vm_env =
-                OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+                OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
 
             let qry = "(print (wrb-get-event-loop-name))";
             let event_loop_name_opt = self
@@ -376,11 +375,9 @@ impl Renderer {
         headers_db: &dyn HeadersDB,
         main_code_id: &QualifiedContractIdentifier,
     ) -> Result<HashSet<u128>, Error> {
-        let mainnet = wrb_tx.mainnet();
         let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
         db.begin();
-        let mut vm_env =
-            OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+        let mut vm_env = OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
 
         let num_subscriptions = {
             let qry = "(print (wrb-get-num-event-subscriptions))";
@@ -422,11 +419,9 @@ impl Renderer {
         headers_db: &dyn HeadersDB,
         main_code_id: &QualifiedContractIdentifier,
     ) -> Result<u64, Error> {
-        let mainnet = wrb_tx.mainnet();
         let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
         db.begin();
-        let mut vm_env =
-            OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+        let mut vm_env = OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
 
         let delay_val = {
             let qry = "(print (wrb-get-event-loop-time))";
@@ -460,11 +455,9 @@ impl Renderer {
         event_handler: &str,
         event: WrbEvent,
     ) -> Result<Value, Error> {
-        let mainnet = wrb_tx.mainnet();
         let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
         db.begin();
-        let mut vm_env =
-            OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+        let mut vm_env = OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
 
         let runner = format!(
             "(print ({} u{} u{} u{} 0x{}))",
@@ -510,9 +503,9 @@ impl Renderer {
         let linked_code = Self::wrb_link(&input);
         let main_code_id = vm.get_code_id();
         let headers_db = vm.headers_db();
+
         let code_hash = Hash160::from_data(compressed_input);
         let mut wrb_tx = vm.begin_page_load(&code_hash)?;
-        let mainnet = wrb_tx.mainnet();
 
         // instantiate and run main code
         self.initialize_main(&mut wrb_tx, &headers_db, &main_code_id, &linked_code)?;
@@ -536,7 +529,7 @@ impl Renderer {
             let mut db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
             db.begin();
             let mut vm_env =
-                OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+                OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
             let root = self.make_root(&mut vm_env, &main_code_id)?;
             let (mut db, _) = vm_env
                 .destruct()
@@ -588,7 +581,7 @@ impl Renderer {
                 db.begin();
 
                 let mut vm_env =
-                    OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+                    OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
                 let root_update = self.make_root_update(&mut vm_env, &main_code_id, viewports)?;
 
                 let (mut db, _) = vm_env
@@ -608,7 +601,7 @@ impl Renderer {
                 db.begin();
 
                 let mut vm_env =
-                    OwnedEnvironment::new_free(mainnet, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
+                    OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
                 let mut root = self.make_root(&mut vm_env, &main_code_id)?;
                 root.frame_delay = if has_timer_event {
                     Some(event_loop_delay)

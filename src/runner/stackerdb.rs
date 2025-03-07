@@ -34,6 +34,9 @@ use crate::runner::Error;
 use crate::runner::NeighborAddress;
 use crate::runner::Runner;
 
+use crate::net::session::NodeSession;
+use crate::net::HandshakeData;
+
 use stacks_common::types::chainstate::StacksAddress;
 use stacks_common::types::chainstate::StacksPrivateKey;
 use stacks_common::types::chainstate::StacksPublicKey;
@@ -220,7 +223,8 @@ impl StackerDBClient for StackerDBSession {
 }
 
 impl Runner {
-    /// Get a list of hosts that replicate a particular StackerDB
+    /// Get a list of hosts that replicate a particular StackerDB.
+    /// These will be p2p addresses.
     pub fn run_get_stackerdb_replicas(
         node_addr: &SocketAddr,
         contract_id: &QualifiedContractIdentifier,
@@ -232,6 +236,11 @@ impl Runner {
         )
         .map_err(|e| Error::Serialize(format!("Failed to build a Stacks address: {:?}", &e)))?;
 
+        wrb_debug!(
+            "Get all StackerDB replicas of {} from {}",
+            contract_id,
+            node_addr
+        );
         let bytes = run_http_request(
             &mut sock,
             node_addr,
@@ -436,8 +445,65 @@ impl Runner {
         stackerdb_session.get_signers()
     }
 
+    /// Run a node handshake
+    pub fn run_node_handshake(
+        node_data_addr: &SocketAddr,
+        p2p_node_addr: &SocketAddr,
+    ) -> Result<HandshakeData, Error> {
+        let session =
+            NodeSession::begin(node_data_addr.clone(), p2p_node_addr.clone()).map_err(|e| {
+                Error::FailedToRun(
+                    format!("Failed to handshake with node {}", node_data_addr),
+                    vec![format!("Handshake error {}", &e)],
+                )
+            })?;
+
+        Ok(session.handshake_accept_data.ok_or(Error::FailedToRun(
+            format!("Failed to handshake with {}", p2p_node_addr),
+            vec![],
+        ))?)
+    }
+
+    /// resolve a StackerDB p2p address to its data address
+    pub fn run_resolve_stackerdb_host(
+        node_addr: &SocketAddr,
+        replica_p2p_addr: &SocketAddr,
+    ) -> Result<SocketAddr, Error> {
+        // resolve its data port
+        let handshake_data = Self::run_node_handshake(node_addr, &replica_p2p_addr)?;
+        let replica_addr = handshake_data
+            .data_url
+            .try_get_socketaddr()
+            .map_err(|e| {
+                Error::FailedToRun(
+                    format!("Failed to resolve '{}'", &handshake_data.data_url),
+                    vec![format!("Name resolve error {:?}", &e)],
+                )
+            })?
+            .ok_or_else(|| {
+                Error::FailedToRun(
+                    format!("Failed to resolve '{}'", &handshake_data.data_url),
+                    vec![],
+                )
+            })?;
+
+        Ok(replica_addr)
+    }
+
+    pub fn resolve_stackerdb_host(
+        &mut self,
+        replica_p2p_addr: &SocketAddr,
+    ) -> Result<SocketAddr, Error> {
+        let Some(node_addr) = self.resolve_node()? else {
+            return Err(Error::NotConnected);
+        };
+        Self::run_resolve_stackerdb_host(&node_addr, replica_p2p_addr)
+    }
+
     /// Given the address of a local Stacks node, find the address of a node that can serve a given
     /// replica.
+    /// Note that the address will be the p2p address, not the rpc address.
+    /// Use `run_node_handshake()` to get the rpc address (among other things)
     pub fn run_find_stackerdb(
         node_addr: &SocketAddr,
         contract_id: &QualifiedContractIdentifier,
@@ -460,6 +526,12 @@ impl Runner {
             }
         }
 
+        wrb_debug!(
+            "Find stackerdb replica for {} from {}",
+            contract_id,
+            node_addr
+        );
+
         // this node does not replicate this DB, so ask it for one that does
         let mut replicas = Self::run_get_stackerdb_replicas(node_addr, contract_id)?;
         let Some(replica) = replicas.pop() else {
@@ -469,7 +541,8 @@ impl Runner {
             )));
         };
 
-        Ok(replica)
+        // resolve its data port
+        Ok(Self::run_resolve_stackerdb_host(node_addr, &replica)?)
     }
 
     pub fn find_stackerdb(

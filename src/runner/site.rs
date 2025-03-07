@@ -423,7 +423,7 @@ impl Runner {
         zonefile: Vec<u8>,
         mut home_connector: F,
         mut replica_connector: G,
-    ) -> Result<Option<Vec<u8>>, Error>
+    ) -> Result<Option<(Vec<u8>, u32)>, Error>
     where
         F: FnMut(
             &QualifiedContractIdentifier,
@@ -549,7 +549,7 @@ impl Runner {
 
                 match Self::wrbsite_load_from_zonefile_rec(&wrbrec, &mut *replica_client) {
                     Ok(Some(wrbsite_bytes)) => {
-                        return Ok(Some(wrbsite_bytes));
+                        return Ok(Some((wrbsite_bytes, wrbrec.slot_metadata.slot_version)));
                     }
                     Ok(None) => {
                         // not found
@@ -576,7 +576,7 @@ impl Runner {
         ));
     }
 
-    /// Load a wrbsite, given the BNS name.
+    /// Load a wrbsite, given the BNS name, resolver, and StackerDB connectors
     pub fn wrbsite_load_ext<F, G>(
         &mut self,
         bns_resolver: &mut dyn BNSResolver,
@@ -584,7 +584,7 @@ impl Runner {
         namespace: &str,
         home_connector: F,
         replica_connector: G,
-    ) -> Result<Option<Vec<u8>>, Error>
+    ) -> Result<Option<(Vec<u8>, u32)>, Error>
     where
         F: FnMut(
             &QualifiedContractIdentifier,
@@ -633,24 +633,54 @@ impl Runner {
         self.wrbsite_load_from_zonefile(zonefile, home_connector, replica_connector)
     }
 
-    /// Helper method to load a wrbsite, given a BNS name
+    /// Home node connector
+    pub fn home_node_connect(
+        contract_id: &QualifiedContractIdentifier,
+        node_addr: &SocketAddr,
+    ) -> Result<Box<dyn StackerDBClient>, Error> {
+        let session = StackerDBSession::new(node_addr.clone(), contract_id.clone());
+        Ok(Box::new(session))
+    }
+
+    /// Replica node connector
+    pub fn replica_node_connect(
+        contract_id: &QualifiedContractIdentifier,
+        home_node_addr: &SocketAddr,
+        node_p2p_addr: &SocketAddr,
+    ) -> Result<Box<dyn StackerDBClient>, Error> {
+        let node_addr = Self::run_resolve_stackerdb_host(home_node_addr, node_p2p_addr)?;
+        wrb_debug!(
+            "wrbsite_load: resolved replica node {} to {}",
+            node_p2p_addr,
+            &node_addr
+        );
+
+        let session = StackerDBSession::new(node_addr, contract_id.clone());
+        Ok(Box::new(session))
+    }
+
+    /// Helper method to load a wrbsite, given a BNS name and resolver.
+    /// Returns Some((bytes, version)) on success
+    /// Returns None if the name doesn't exist
     pub fn wrbsite_load(
         &mut self,
         bns_resolver: &mut dyn BNSResolver,
         name: &str,
         namespace: &str,
-    ) -> Result<Option<Vec<u8>>, Error> {
+    ) -> Result<Option<(Vec<u8>, u32)>, Error> {
+        let Some(home_node_addr) = self.resolve_node()? else {
+            return Err(Error::NotConnected);
+        };
+
         self.wrbsite_load_ext(
             bns_resolver,
             name,
             namespace,
             |contract_id: &QualifiedContractIdentifier, node_addr: &SocketAddr| {
-                let session = StackerDBSession::new(node_addr.clone(), contract_id.clone());
-                Ok(Box::new(session))
+                Runner::home_node_connect(contract_id, node_addr)
             },
-            |contract_id: &QualifiedContractIdentifier, node_addr: &SocketAddr| {
-                let session = StackerDBSession::new(node_addr.clone(), contract_id.clone());
-                Ok(Box::new(session))
+            |contract_id: &QualifiedContractIdentifier, node_p2p_addr: &SocketAddr| {
+                Runner::replica_node_connect(contract_id, &home_node_addr, node_p2p_addr)
             },
         )
     }

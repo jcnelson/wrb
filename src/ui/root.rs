@@ -217,6 +217,8 @@ pub struct Root {
     pub focused: Option<u128>,
     /// focus order
     pub(crate) focus_order: HashMap<u128, u128>,
+    /// reverse focus order
+    pub(crate) reverse_focus_order: HashMap<u128, u128>,
     /// first element to focus
     pub(crate) focus_first: Option<u128>,
     /// form elements, keyed by element ID
@@ -244,6 +246,7 @@ impl Root {
             frame_delay: None,
             focused: None,
             focus_order: HashMap::new(),
+            reverse_focus_order: HashMap::new(),
             focus_first: None,
             forms: HashMap::new(),
             cursor: None,
@@ -392,12 +395,31 @@ impl Root {
     /// Update from a FrameUpdate
     pub fn update_forms(&mut self, frame_update: FrameUpdate) -> Result<(), Error> {
         let mut viewport_cursors = HashMap::new();
+
+        // extract existing forms
         let mut forms = std::mem::replace(&mut self.forms, HashMap::new());
 
-        // remove old forms
+        // remove old dynamic forms
         let old_forms = std::mem::replace(&mut self.dynamic_forms, HashSet::new());
         for old_form_id in old_forms.into_iter() {
             forms.remove(&old_form_id);
+        }
+
+        // clear dirty viewports
+        for (_element_id, ui_content) in forms.iter() {
+            let viewport_id = ui_content.viewport_id();
+            let Some(viewport) = self.viewport_mut(viewport_id) else {
+                continue;
+            };
+            viewport.clear();
+        }
+
+        for ui_content in frame_update.new_contents.iter() {
+            let viewport_id = ui_content.viewport_id();
+            let Some(viewport) = self.viewport_mut(viewport_id) else {
+                continue;
+            };
+            viewport.clear();
         }
 
         // redraw static forms and re-compute their cursors
@@ -528,19 +550,29 @@ impl Root {
         }
 
         let mut focus_order = HashMap::new();
+        let mut reverse_focus_order = HashMap::new();
         for i in 0..(element_ids.len() - 1) {
             focus_order.insert(element_ids[i], element_ids[i + 1]);
         }
+        for i in 0..(element_ids.len() - 1) {
+            reverse_focus_order.insert(element_ids[i + 1], element_ids[i]);
+        }
         focus_order.insert(element_ids[element_ids.len() - 1], element_ids[0]);
+        reverse_focus_order.insert(element_ids[0], element_ids[element_ids.len() - 1]);
         self.focus_order = focus_order;
+        self.reverse_focus_order = reverse_focus_order;
         self.focus_first = Some(element_ids[0]);
     }
 
     /// Update the focus pointer
-    pub fn next_focus(&mut self) -> Result<(), Error> {
+    fn inner_next_focus(&mut self, reverse: bool) -> Result<(), Error> {
         let old_focused = self.focused.clone();
         if let Some(focused) = self.focused {
-            let next_focused = self.focus_order.get(&focused).cloned();
+            let next_focused = if reverse {
+                self.reverse_focus_order.get(&focused).cloned()
+            } else {
+                self.focus_order.get(&focused).cloned()
+            };
             self.focused = next_focused;
         } else {
             self.focused = self.focus_first.clone();
@@ -558,6 +590,14 @@ impl Root {
             }
         }
         Ok(())
+    }
+
+    pub fn next_focus(&mut self) -> Result<(), Error> {
+        self.inner_next_focus(false)
+    }
+
+    pub fn prev_focus(&mut self) -> Result<(), Error> {
+        self.inner_next_focus(true)
     }
 
     pub fn clear_focus(&mut self) -> Result<(), Error> {
