@@ -17,6 +17,7 @@
 
 use clarity::vm::types::QualifiedContractIdentifier;
 use stacks_common::util::secp256k1::Secp256k1PrivateKey;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,8 +45,18 @@ pub struct Config {
     debug_path: String,
     /// our wrbpod
     wrbpod: WrbpodAddress,
+    /// Path to mocked stackerdb databases
+    mock_stackerdb_paths: HashMap<QualifiedContractIdentifier, String>,
     /// Path from which we loaded this
     __path: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ConfigFileMockStackerDB {
+    /// address to mock
+    contract_id: String,
+    /// DB on disk
+    path: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -65,6 +76,8 @@ pub struct ConfigFile {
     debug_path: Option<String>,
     /// our wrbpod, encoded as <address>.<name>/<slot-id>
     wrbpod: String,
+    /// Path to mocked stackerdb databases
+    mocked_stackerdb: Option<Vec<ConfigFileMockStackerDB>>,
 }
 
 impl ConfigFile {
@@ -84,6 +97,20 @@ impl TryFrom<ConfigFile> for Config {
             )
         })?;
 
+        let mut mock_stackerdb_paths: HashMap<QualifiedContractIdentifier, String> = HashMap::new();
+        if let Some(mocked_stackerdbs) = config_file.mocked_stackerdb {
+            for mocked_stackerdb_path in mocked_stackerdbs.iter() {
+                let addr = QualifiedContractIdentifier::parse(&mocked_stackerdb_path.contract_id)
+                    .map_err(|e| {
+                    format!(
+                        "Failed to decode '{}': expected <addr>.<name> ({})",
+                        &mocked_stackerdb_path.path, &e
+                    )
+                })?;
+                mock_stackerdb_paths.insert(addr, mocked_stackerdb_path.path.clone());
+            }
+        }
+
         Ok(Config {
             mainnet: config_file.mainnet,
             node_host: config_file.node_host,
@@ -93,6 +120,7 @@ impl TryFrom<ConfigFile> for Config {
             storage: config_file.storage.unwrap_or("./db".into()),
             debug_path: config_file.debug_path.unwrap_or("./debug.log".into()),
             wrbpod: default_wrbpod,
+            mock_stackerdb_paths,
             __path: "".into(),
         })
     }
@@ -108,6 +136,16 @@ impl From<Config> for ConfigFile {
             storage: Some(config.storage),
             debug_path: Some(config.debug_path),
             wrbpod: config.wrbpod.to_string(),
+            mocked_stackerdb: Some(
+                config
+                    .mock_stackerdb_paths
+                    .into_iter()
+                    .map(|(addr, path)| ConfigFileMockStackerDB {
+                        contract_id: addr.to_string(),
+                        path,
+                    })
+                    .collect(),
+            ),
         }
     }
 }
@@ -118,7 +156,7 @@ impl Config {
             mainnet,
             node_host: node_host.into(),
             node_port,
-            private_key: Secp256k1PrivateKey::new(),
+            private_key: Secp256k1PrivateKey::random(),
             storage: "./db".into(),
             debug_path: "./debug.log".into(),
             wrbpod: WrbpodAddress::new(
@@ -128,7 +166,22 @@ impl Config {
                 .unwrap(),
                 0,
             ),
+            mock_stackerdb_paths: HashMap::new(),
             __path: "".into(),
+        }
+    }
+
+    fn abspath(&self, path: &str) -> String {
+        if let Some('/') = path.chars().next() {
+            // absolute path
+            path.to_string()
+        } else {
+            // relative path
+            if let Some(dirname) = Path::new(&self.__path).parent() {
+                format!("{}/{}", dirname.display(), path)
+            } else {
+                path.to_string()
+            }
         }
     }
 
@@ -137,6 +190,13 @@ impl Config {
         let config_file = ConfigFile::from_str(&content)?;
         let mut c = Config::try_from(config_file)?;
         c.__path = path.into();
+
+        // fix up mock stackerdb paths
+        let mut abs_stackerdb_paths = HashMap::new();
+        for (addr, path) in c.mock_stackerdb_paths.iter() {
+            abs_stackerdb_paths.insert(addr.clone(), c.abspath(path));
+        }
+        c.mock_stackerdb_paths = abs_stackerdb_paths;
         Ok(c)
     }
 
@@ -154,6 +214,10 @@ impl Config {
 
     pub fn default_wrbpod(&self) -> &WrbpodAddress {
         &self.wrbpod
+    }
+
+    pub fn mock_stackerdb_paths(&self) -> &HashMap<QualifiedContractIdentifier, String> {
+        &self.mock_stackerdb_paths
     }
 
     /// This is the contract ID of the BNS contract that can resolve a name to its owner and price.
@@ -185,30 +249,10 @@ impl Config {
     }
 
     pub fn db_path(&self) -> String {
-        if let Some('/') = self.storage.chars().next() {
-            // absolute path
-            self.storage.clone()
-        } else {
-            // relative path
-            if let Some(dirname) = Path::new(&self.__path).parent() {
-                format!("{}/{}", dirname.display(), &self.storage)
-            } else {
-                self.storage.clone()
-            }
-        }
+        self.abspath(&self.storage)
     }
 
     pub fn debug_path(&self) -> String {
-        if let Some('/') = self.debug_path.chars().next() {
-            // absolute path
-            self.debug_path.clone()
-        } else {
-            // relative path
-            if let Some(dirname) = Path::new(&self.__path).parent() {
-                format!("{}/{}", dirname.display(), &self.debug_path)
-            } else {
-                self.debug_path.clone()
-            }
-        }
+        self.abspath(&self.debug_path)
     }
 }

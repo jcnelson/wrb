@@ -15,6 +15,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::sync::LazyLock;
+use std::sync::Mutex;
+
 use crate::vm::storage::WrbDB;
 use crate::vm::storage::WrbHeadersDB;
 use std::ops::Deref;
@@ -33,8 +36,7 @@ use crate::util::privkey_to_principal;
 use crate::storage::Error as WrbpodError;
 use crate::storage::WrbpodAddress;
 
-use crate::vm::WRB_CONTRACT;
-use crate::vm::WRB_LOW_LEVEL_CONTRACT;
+use crate::ui::ValueExtensions;
 
 use clarity::boot_util::boot_code_addr;
 use clarity::boot_util::boot_code_id;
@@ -118,7 +120,7 @@ fn err_ascii_512(code: u128, msg: &str) -> Value {
     .expect("FATAL: failed to construct error tuple")
 }
 
-/// Trampoline code for contract-call to `.wrb call-readonly`
+/// Trampoline code for contract-call to `.wrb-ll call-readonly`
 fn handle_wrb_call_readonly(
     global_context: &mut GlobalContext,
     sender: PrincipalData,
@@ -188,7 +190,7 @@ fn handle_wrb_call_readonly(
         |env| {
             env.execute_contract_allow_private(
                 &contract_id,
-                "set-last-call-readonly",
+                "wrb-ll-set-last-call-readonly",
                 &[SymbolicExpression::atom_value(value)],
                 false,
             )
@@ -198,7 +200,7 @@ fn handle_wrb_call_readonly(
     Ok(())
 }
 
-/// Trampoline code for contract-call to `.wrb buff-to-string-utf8`
+/// Trampoline code for contract-call to `.wrb-ll buff-to-string-utf8`
 fn handle_buff_to_string_utf8(
     global_context: &mut GlobalContext,
     sender: PrincipalData,
@@ -234,7 +236,7 @@ fn handle_buff_to_string_utf8(
         |env| {
             env.execute_contract_allow_private(
                 contract_id,
-                "set-last-wrb-buff-to-string-utf8",
+                "wrb-ll-set-last-wrb-buff-to-string-utf8",
                 &[SymbolicExpression::atom_value(value)],
                 false,
             )
@@ -244,7 +246,7 @@ fn handle_buff_to_string_utf8(
     Ok(())
 }
 
-/// Trampoline code for contract-call to `.wrb string-ascii-to-string-utf8`
+/// Trampoline code for contract-call to `.wrb-ll string-ascii-to-string-utf8`
 fn handle_string_ascii_to_string_utf8(
     global_context: &mut GlobalContext,
     sender: PrincipalData,
@@ -280,7 +282,7 @@ fn handle_string_ascii_to_string_utf8(
         |env| {
             env.execute_contract_allow_private(
                 contract_id,
-                "set-last-wrb-string-ascii-to-string-utf8",
+                "wrb-ll-set-last-wrb-string-ascii-to-string-utf8",
                 &[SymbolicExpression::atom_value(value)],
                 false,
             )
@@ -290,7 +292,97 @@ fn handle_string_ascii_to_string_utf8(
     Ok(())
 }
 
-/// Trampoline code for contract-call to `.wrb wrbpod-default`
+/// Trampoline code for contract-call to `.wrb-ll store-large-string-utf8`
+fn handle_store_large_string_utf8(args: &[Value]) -> Result<(), Error> {
+    // must be two arguments
+    if args.len() != 2 {
+        return Err(InterpreterError::InterpreterError(format!(
+            "Expected 2 arguments, got {}",
+            args.len()
+        ))
+        .into());
+    }
+
+    let handle = args[0].clone().expect_u128()?;
+    let utf8_str = args[1].clone().expect_utf8()?;
+
+    with_globals(|globals| globals.store_large_string_utf8(handle, utf8_str));
+    Ok(())
+}
+
+/// Trampoline code for contract-call to `.wrb-ll load-large-string-utf8`
+fn handle_load_large_string_utf8(
+    global_context: &mut GlobalContext,
+    sender: PrincipalData,
+    sponsor: Option<PrincipalData>,
+    contract_id: &QualifiedContractIdentifier,
+    args: &[Value],
+    wrb_lowlevel_contract: Contract,
+) -> Result<(), Error> {
+    // must be one argument
+    if args.len() != 1 {
+        return Err(InterpreterError::InterpreterError(format!(
+            "Expected 1 argument, got {}",
+            args.len()
+        ))
+        .into());
+    }
+
+    let handle = args[0].clone().expect_u128()?;
+    let utf8_str_opt = with_globals(|globals| globals.load_large_string_utf8(handle));
+    if let Some(s) = utf8_str_opt {
+        let loaded_str_value_opt = Value::some(
+            Value::string_utf8_from_string_utf8_literal(s)
+                .expect("FATAL: could not load a string-utf8 we stored"),
+        )?;
+        env_with_global_context(
+            global_context,
+            sender,
+            sponsor,
+            wrb_lowlevel_contract.contract_context,
+            |env| {
+                env.execute_contract_allow_private(
+                    contract_id,
+                    "wrb-ll-set-last-load-large-string-utf8",
+                    &[SymbolicExpression::atom_value(loaded_str_value_opt)],
+                    false,
+                )
+            },
+        )
+        .expect("FATAL: failed to set last load-large-string-utf8 request");
+    } else {
+        let loaded_str_value_opt = env_with_global_context(
+            global_context,
+            sender,
+            sponsor,
+            wrb_lowlevel_contract.contract_context,
+            |env| {
+                env.execute_contract_allow_private(
+                    contract_id,
+                    "wrb-ll-cache-miss-load-large-string-utf8",
+                    &[SymbolicExpression::atom_value(Value::UInt(handle))],
+                    false,
+                )
+            },
+        )
+        .expect("FATAL: failed to set last load-large-string-utf8 request");
+
+        let loaded_str_opt = loaded_str_value_opt
+            .clone()
+            .expect_result_ok()?
+            .expect_optional()?
+            .map(|s_value| s_value.expect_utf8())
+            .transpose()?;
+
+        if let Some(s) = loaded_str_opt {
+            with_globals(|globals| globals.store_large_string_utf8(handle, s.clone()));
+        }
+    }
+
+    Ok(())
+}
+
+/// Trampoline code for contract-call to `.wrb-ll wrbpod-default`
 pub fn handle_wrbpod_default(
     global_context: &mut GlobalContext,
     sender: PrincipalData,
@@ -330,7 +422,7 @@ pub fn handle_wrbpod_default(
         |env| {
             env.execute_contract_allow_private(
                 contract_id,
-                "finish-wrbpod-default",
+                "wrb-ll-finish-wrbpod-default",
                 &[SymbolicExpression::atom_value(default_superblock_value)],
                 false,
             )
@@ -340,7 +432,7 @@ pub fn handle_wrbpod_default(
     Ok(())
 }
 
-/// Trampoline code for contract-call to `.wrb wrbpod-open`
+/// Trampoline code for contract-call to `.wrb-ll wrbpod-open`
 pub fn handle_wrbpod_open(
     global_context: &mut GlobalContext,
     sender: PrincipalData,
@@ -393,7 +485,7 @@ pub fn handle_wrbpod_open(
                 |env| {
                     env.execute_contract_allow_private(
                         contract_id,
-                        "finish-wrbpod-open",
+                        "wrb-ll-finish-wrbpod-open",
                         &[
                             SymbolicExpression::atom_value(args[0].clone()),
                             SymbolicExpression::atom_value(Value::UInt(0)),
@@ -445,7 +537,7 @@ pub fn handle_wrbpod_open(
             |env| {
                 env.execute_contract_allow_private(
                     contract_id,
-                    "finish-wrbpod-open",
+                    "wrb-ll-finish-wrbpod-open",
                     &[
                         SymbolicExpression::atom_value(args[0].clone()),
                         SymbolicExpression::atom_value(Value::UInt(wrbpod_session_id)),
@@ -485,7 +577,7 @@ pub fn handle_wrbpod_open(
                     |env| {
                         env.execute_contract_allow_private(
                             contract_id,
-                            "finish-wrbpod-open",
+                            "wrb-ll-finish-wrbpod-open",
                             &[
                                 SymbolicExpression::atom_value(args[0].clone()),
                                 SymbolicExpression::atom_value(Value::UInt(0)),
@@ -523,7 +615,7 @@ pub fn handle_wrbpod_open(
                     |env| {
                         env.execute_contract_allow_private(
                             contract_id,
-                            "finish-wrbpod-open",
+                            "wrb-ll-finish-wrbpod-open",
                             &[
                                 SymbolicExpression::atom_value(args[0].clone()),
                                 SymbolicExpression::atom_value(Value::UInt(0)),
@@ -545,7 +637,7 @@ pub fn handle_wrbpod_open(
     )
     .map_err(|e| {
         let msg = format!(
-            "Failed to open wrbpod session to {}: {:?}",
+            "Failed to open home wrbpod session to {}: {:?}",
             &wrbpod_contract_id, &e
         );
         wrb_warn!("{}", &msg);
@@ -564,7 +656,7 @@ pub fn handle_wrbpod_open(
                 |env| {
                     env.execute_contract_allow_private(
                         contract_id,
-                        "finish-wrbpod-open",
+                        "wrb-ll-finish-wrbpod-open",
                         &[
                             SymbolicExpression::atom_value(args[0].clone()),
                             SymbolicExpression::atom_value(Value::UInt(wrbpod_session_id)),
@@ -588,12 +680,12 @@ pub fn handle_wrbpod_open(
             let result = err_ascii_512(
                 WRB_ERR_WRBPOD_OPEN_FAILURE,
                 &format!(
-                    "wrb: failed to open wrbpod session to {}: {:?}",
+                    "wrb: failed to store opened home wrbpod session to {}: {:?}",
                     &wrbpod_contract_id, &e
                 ),
             );
             wrb_warn!(
-                "Failed to open wrbpod session to {}: {:?}",
+                "Failed to store opened home wrbpod session to {}: {:?}",
                 &wrbpod_contract_id,
                 &e
             );
@@ -605,7 +697,7 @@ pub fn handle_wrbpod_open(
                 |env| {
                     env.execute_contract_allow_private(
                         contract_id,
-                        "finish-wrbpod-open",
+                        "wrb-ll-finish-wrbpod-open",
                         &[
                             SymbolicExpression::atom_value(args[0].clone()),
                             SymbolicExpression::atom_value(Value::UInt(0)),
@@ -620,7 +712,7 @@ pub fn handle_wrbpod_open(
     Ok(())
 }
 
-/// Trampoline code for contract-call to `.wrb wrbpod-get-num-slots`
+/// Trampoline code for contract-call to `.wrb-ll wrbpod-get-num-slots`
 pub fn handle_wrbpod_get_num_slots(
     global_context: &mut GlobalContext,
     sender: PrincipalData,
@@ -697,7 +789,7 @@ pub fn handle_wrbpod_get_num_slots(
         |env| {
             env.execute_contract_allow_private(
                 contract_id,
-                "set-last-wrbpod-get-num-slots",
+                "wrb-ll-set-last-wrbpod-get-num-slots",
                 &[SymbolicExpression::atom_value(result)],
                 false,
             )
@@ -723,16 +815,16 @@ fn load_app_name(
         |env| {
             env.eval_read_only_with_rules(
                 &wrb_lowlevel_contract.contract_context.contract_identifier,
-                "(get-app-name)",
+                "(wrb-ll-get-app-name)",
                 ASTRules::PrecheckSize,
             )
         },
     )
-    .expect("FATAL: failed to run `get-app-name`");
+    .expect("FATAL: failed to run `wrb-ll-get-app-name`");
 
     let name_data = name_value
         .expect_tuple()
-        .expect("FATAL: `get-app-name` did not eval to a tuple");
+        .expect("FATAL: `wrb-ll-get-app-name` did not eval to a tuple");
     let name_buff = name_data
         .get("name")
         .cloned()
@@ -752,7 +844,7 @@ fn load_app_name(
     (name.to_string(), namespace.to_string())
 }
 
-/// decode the result to a call to `get-app-code-hash`
+/// decode the result to a call to `wrb-ll-get-app-code-hash`
 fn load_app_code_hash(
     global_context: &mut GlobalContext,
     sender: PrincipalData,
@@ -767,23 +859,23 @@ fn load_app_code_hash(
         |env| {
             env.eval_read_only_with_rules(
                 &wrb_lowlevel_contract.contract_context.contract_identifier,
-                "(get-app-code-hash)",
+                "(wrb-ll-get-app-code-hash)",
                 ASTRules::PrecheckSize,
             )
         },
     )
-    .expect("FATAL: failed to run `get-app-code-hash`");
+    .expect("FATAL: failed to run `wrb-ll-get-app-code-hash`");
 
     let hash_buff = hash_value
         .expect_buff(20)
-        .expect("FATAL: `get-app-code-hash` did not eval to a hash");
+        .expect("FATAL: `wrb-ll-get-app-code-hash` did not eval to a hash");
     let mut hash_bytes = [0u8; 20];
     hash_bytes[0..20].copy_from_slice(&hash_buff[0..20]);
 
     Hash160(hash_bytes)
 }
 
-/// Trampoline code for contract-call to `.wrb wrbpod-alloc-slots`
+/// Trampoline code for contract-call to `.wrb-ll wrbpod-alloc-slots`
 pub fn handle_wrbpod_alloc_slots(
     global_context: &mut GlobalContext,
     sender: PrincipalData,
@@ -811,7 +903,7 @@ pub fn handle_wrbpod_alloc_slots(
             |env| {
                 env.execute_contract_allow_private(
                     contract_id,
-                    "set-last-wrbpod-alloc-slots-result",
+                    "wrb-ll-set-last-wrbpod-alloc-slots-result",
                     &[SymbolicExpression::atom_value(err_ascii_512(
                         WRB_ERR_INVALID,
                         "too many slots",
@@ -861,7 +953,7 @@ pub fn handle_wrbpod_alloc_slots(
         |env| {
             env.execute_contract_allow_private(
                 contract_id,
-                "set-last-wrbpod-alloc-slots-result",
+                "wrb-ll-set-last-wrbpod-alloc-slots-result",
                 &[SymbolicExpression::atom_value(alloc_res_value)],
                 false,
             )
@@ -871,7 +963,7 @@ pub fn handle_wrbpod_alloc_slots(
     Ok(())
 }
 
-/// Trampoline code for contract-call to `.wrb wrbpod-fetch-slot`
+/// Trampoline code for contract-call to `.wrb-ll wrbpod-fetch-slot`
 /// (define-public (wrbpod-fetch-slot (session-id uint) (slot-id uint))
 /// returns (response { version: uint, signer: principal } (string-ascii 512))
 pub fn handle_wrbpod_fetch_slot(
@@ -902,7 +994,7 @@ pub fn handle_wrbpod_fetch_slot(
             |env| {
                 env.execute_contract_allow_private(
                     contract_id,
-                    "set-last-wrbpod-fetch-slot-result",
+                    "wrb-ll-set-last-wrbpod-fetch-slot-result",
                     &[
                         SymbolicExpression::atom_value(Value::UInt(session_id)),
                         SymbolicExpression::atom_value(Value::UInt(args[1].clone().expect_u128()?)),
@@ -979,7 +1071,7 @@ pub fn handle_wrbpod_fetch_slot(
         |env| {
             env.execute_contract_allow_private(
                 contract_id,
-                "set-last-wrbpod-fetch-slot-result",
+                "wrb-ll-set-last-wrbpod-fetch-slot-result",
                 &[
                     SymbolicExpression::atom_value(Value::UInt(session_id)),
                     SymbolicExpression::atom_value(Value::UInt(app_slot_id.into())),
@@ -993,7 +1085,7 @@ pub fn handle_wrbpod_fetch_slot(
     Ok(())
 }
 
-/// Trampoline code for contract-call to `.wrb wrbpod-get-slice`
+/// Trampoline code for contract-call to `.wrb-ll wrbpod-get-slice`
 /// (define-public (wrbpod-get-slice (session-id uint) (slot-id uint) (slice-id uint))
 /// returns (response (buff 786000) (string-ascii 512))
 pub fn handle_wrbpod_get_slice(
@@ -1025,7 +1117,7 @@ pub fn handle_wrbpod_get_slice(
             |env| {
                 env.execute_contract_allow_private(
                     contract_id,
-                    "set-last-wrbpod-get-slice-result",
+                    "wrb-ll-set-last-wrbpod-get-slice-result",
                     &[
                         SymbolicExpression::atom_value(Value::UInt(session_id)),
                         SymbolicExpression::atom_value(Value::UInt(args[1].clone().expect_u128()?)),
@@ -1087,7 +1179,7 @@ pub fn handle_wrbpod_get_slice(
         |env| {
             env.execute_contract_allow_private(
                 contract_id,
-                "set-last-wrbpod-get-slice-result",
+                "wrb-ll-set-last-wrbpod-get-slice-result",
                 &[
                     SymbolicExpression::atom_value(Value::UInt(session_id)),
                     SymbolicExpression::atom_value(Value::UInt(app_slot_id.into())),
@@ -1102,7 +1194,7 @@ pub fn handle_wrbpod_get_slice(
     Ok(())
 }
 
-/// Trampoline code for contract-call to `.wrb wrbpod-put-slice`
+/// Trampoline code for contract-call to `.wrb-ll wrbpod-put-slice`
 /// (define-public (wrbpod-put-slice (session-id uint) (slot-id uint) (slice-id uint) (slide-data (buff 786000))
 /// returns (response bool (string-ascii 512))
 pub fn handle_wrbpod_put_slice(
@@ -1134,7 +1226,7 @@ pub fn handle_wrbpod_put_slice(
             |env| {
                 env.execute_contract_allow_private(
                     contract_id,
-                    "set-last-wrbpod-put-slice-result",
+                    "wrb-ll-set-last-wrbpod-put-slice-result",
                     &[
                         SymbolicExpression::atom_value(Value::UInt(session_id)),
                         SymbolicExpression::atom_value(Value::UInt(args[1].clone().expect_u128()?)),
@@ -1193,7 +1285,7 @@ pub fn handle_wrbpod_put_slice(
         |env| {
             env.execute_contract_allow_private(
                 contract_id,
-                "set-last-wrbpod-put-slice-result",
+                "wrb-ll-set-last-wrbpod-put-slice-result",
                 &[
                     SymbolicExpression::atom_value(Value::UInt(session_id)),
                     SymbolicExpression::atom_value(Value::UInt(app_slot_id.into())),
@@ -1208,7 +1300,7 @@ pub fn handle_wrbpod_put_slice(
     Ok(())
 }
 
-/// Trampoline code for `.wrb wrb-sync`
+/// Trampoline code for `.wrb-ll wrb-sync`
 pub fn handle_wrbpod_sync_slot(
     global_context: &mut GlobalContext,
     sender: PrincipalData,
@@ -1237,7 +1329,7 @@ pub fn handle_wrbpod_sync_slot(
             |env| {
                 env.execute_contract_allow_private(
                     contract_id,
-                    "set-last-wrbpod-sync-slot-result",
+                    "wrb-ll-set-last-wrbpod-sync-slot-result",
                     &[
                         SymbolicExpression::atom_value(Value::UInt(session_id)),
                         SymbolicExpression::atom_value(Value::UInt(args[1].clone().expect_u128()?)),
@@ -1293,7 +1385,7 @@ pub fn handle_wrbpod_sync_slot(
         |env| {
             env.execute_contract_allow_private(
                 contract_id,
-                "set-last-wrbpod-sync-slot-result",
+                "wrb-ll-set-last-wrbpod-sync-slot-result",
                 &[
                     SymbolicExpression::atom_value(Value::UInt(session_id)),
                     SymbolicExpression::atom_value(Value::UInt(args[1].clone().expect_u128()?)),
@@ -1316,6 +1408,10 @@ pub fn handle_wrb_contract_call_special_cases(
     args: &[Value],
     result: &Value,
 ) -> Result<(), Error> {
+    if *contract_id != boot_code_id("wrb-ll", true) {
+        return Ok(());
+    }
+
     wrb_debug!(
         "Run special-case handler for {}.{}: {:?} --> {:?}",
         contract_id,
@@ -1323,132 +1419,154 @@ pub fn handle_wrb_contract_call_special_cases(
         args,
         result
     );
-    if *contract_id == boot_code_id(WRB_LOW_LEVEL_CONTRACT, true) {
-        let runner = make_runner();
-        let sender = match sender {
-            Some(s) => s.clone(),
-            None => boot_code_addr(true).into(),
-        };
-        let sponsor = sponsor.cloned();
-        let wrb_lowlevel_contract = global_context
-            .database
-            .get_contract(contract_id)
-            .expect("FATAL: could not load wrb contract metadata");
 
-        match function_name {
-            "call-readonly" => {
-                handle_wrb_call_readonly(
-                    global_context,
-                    sender,
-                    sponsor,
-                    contract_id,
-                    args,
-                    wrb_lowlevel_contract,
-                    runner,
-                )?;
-            }
-            "buff-to-string-utf8" => {
-                handle_buff_to_string_utf8(
-                    global_context,
-                    sender,
-                    sponsor,
-                    contract_id,
-                    args,
-                    wrb_lowlevel_contract,
-                )?;
-            }
-            "string-ascii-to-string-utf8" => {
-                handle_string_ascii_to_string_utf8(
-                    global_context,
-                    sender,
-                    sponsor,
-                    contract_id,
-                    args,
-                    wrb_lowlevel_contract,
-                )?;
-            }
-            "wrbpod-default" => {
-                handle_wrbpod_default(
-                    global_context,
-                    sender,
-                    sponsor,
-                    contract_id,
-                    args,
-                    wrb_lowlevel_contract,
-                )?;
-            }
-            "wrbpod-open" => {
-                handle_wrbpod_open(
-                    global_context,
-                    sender,
-                    sponsor,
-                    contract_id,
-                    args,
-                    wrb_lowlevel_contract,
-                )?;
-            }
-            "wrbpod-get-num-slots" => {
-                handle_wrbpod_get_num_slots(
-                    global_context,
-                    sender,
-                    sponsor,
-                    contract_id,
-                    args,
-                    wrb_lowlevel_contract,
-                )?;
-            }
-            "wrbpod-alloc-slots" => {
-                handle_wrbpod_alloc_slots(
-                    global_context,
-                    sender,
-                    sponsor,
-                    contract_id,
-                    args,
-                    wrb_lowlevel_contract,
-                )?;
-            }
-            "wrbpod-fetch-slot" => {
-                handle_wrbpod_fetch_slot(
-                    global_context,
-                    sender,
-                    sponsor,
-                    contract_id,
-                    args,
-                    wrb_lowlevel_contract,
-                )?;
-            }
-            "wrbpod-get-slice" => {
-                handle_wrbpod_get_slice(
-                    global_context,
-                    sender,
-                    sponsor,
-                    contract_id,
-                    args,
-                    wrb_lowlevel_contract,
-                )?;
-            }
-            "wrbpod-put-slice" => {
-                handle_wrbpod_put_slice(
-                    global_context,
-                    sender,
-                    sponsor,
-                    contract_id,
-                    args,
-                    wrb_lowlevel_contract,
-                )?;
-            }
-            "wrbpod-sync-slot" => {
-                handle_wrbpod_sync_slot(
-                    global_context,
-                    sender,
-                    sponsor,
-                    contract_id,
-                    args,
-                    wrb_lowlevel_contract,
-                )?;
-            }
-            _ => {}
+    let runner = make_runner();
+    let sender = match sender {
+        Some(s) => s.clone(),
+        None => boot_code_addr(true).into(),
+    };
+    let sponsor = sponsor.cloned();
+
+    let wrb_lowlevel_contract =
+        if let Some(contract) = with_globals(|globals| globals.load_cached_contract(contract_id)) {
+            contract
+        } else {
+            let wrb_lowlevel_contract = global_context
+                .database
+                .get_contract(contract_id)
+                .expect("FATAL: could not load wrb contract metadata");
+
+            with_globals(|globals| {
+                globals.store_cached_contract(contract_id.clone(), wrb_lowlevel_contract)
+            })
         };
+
+    match function_name {
+        "wrb-ll-call-readonly" => {
+            handle_wrb_call_readonly(
+                global_context,
+                sender,
+                sponsor,
+                contract_id,
+                args,
+                wrb_lowlevel_contract,
+                runner,
+            )?;
+        }
+        "wrb-ll-buff-to-string-utf8" => {
+            handle_buff_to_string_utf8(
+                global_context,
+                sender,
+                sponsor,
+                contract_id,
+                args,
+                wrb_lowlevel_contract,
+            )?;
+        }
+        "wrb-ll-string-ascii-to-string-utf8" => {
+            handle_string_ascii_to_string_utf8(
+                global_context,
+                sender,
+                sponsor,
+                contract_id,
+                args,
+                wrb_lowlevel_contract,
+            )?;
+        }
+        "wrb-ll-load-large-string-utf8" => {
+            handle_load_large_string_utf8(
+                global_context,
+                sender,
+                sponsor,
+                contract_id,
+                args,
+                wrb_lowlevel_contract,
+            )?;
+        }
+        "wrb-ll-store-large-string-utf8" => {
+            handle_store_large_string_utf8(args)?;
+        }
+        "wrb-ll-wrbpod-default" => {
+            handle_wrbpod_default(
+                global_context,
+                sender,
+                sponsor,
+                contract_id,
+                args,
+                wrb_lowlevel_contract,
+            )?;
+        }
+        "wrb-ll-wrbpod-open" => {
+            handle_wrbpod_open(
+                global_context,
+                sender,
+                sponsor,
+                contract_id,
+                args,
+                wrb_lowlevel_contract,
+            )?;
+        }
+        "wrb-ll-wrbpod-get-num-slots" => {
+            handle_wrbpod_get_num_slots(
+                global_context,
+                sender,
+                sponsor,
+                contract_id,
+                args,
+                wrb_lowlevel_contract,
+            )?;
+        }
+        "wrb-ll-wrbpod-alloc-slots" => {
+            handle_wrbpod_alloc_slots(
+                global_context,
+                sender,
+                sponsor,
+                contract_id,
+                args,
+                wrb_lowlevel_contract,
+            )?;
+        }
+        "wrb-ll-wrbpod-fetch-slot" => {
+            handle_wrbpod_fetch_slot(
+                global_context,
+                sender,
+                sponsor,
+                contract_id,
+                args,
+                wrb_lowlevel_contract,
+            )?;
+        }
+        "wrb-ll-wrbpod-get-slice" => {
+            handle_wrbpod_get_slice(
+                global_context,
+                sender,
+                sponsor,
+                contract_id,
+                args,
+                wrb_lowlevel_contract,
+            )?;
+        }
+        "wrb-ll-wrbpod-put-slice" => {
+            handle_wrbpod_put_slice(
+                global_context,
+                sender,
+                sponsor,
+                contract_id,
+                args,
+                wrb_lowlevel_contract,
+            )?;
+        }
+        "wrb-ll-wrbpod-sync-slot" => {
+            handle_wrbpod_sync_slot(
+                global_context,
+                sender,
+                sponsor,
+                contract_id,
+                args,
+                wrb_lowlevel_contract,
+            )?;
+        }
+        _ => {}
     }
     Ok(())
 }

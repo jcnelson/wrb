@@ -21,6 +21,8 @@ use crate::ui::Error;
 use crate::ui::ValueExtensions;
 use clarity::vm::Value;
 
+use crate::core::with_globals;
+
 use crate::ui::forms::{WrbForm, WrbFormEvent, WrbFormTypes};
 
 /// UI command to print text to a viewport
@@ -56,11 +58,22 @@ impl WrbForm for PrintText {
     /// Load from Clarity value
     fn from_clarity_value(viewport_id: u128, v: Value) -> Result<Self, Error> {
         let text_tuple = v.expect_tuple()?;
-        let text = text_tuple
-            .get("text")
+
+        let text_handle = text_tuple
+            .get("text-handle")
             .cloned()
-            .expect("FATAL: no `text`")
-            .expect_utf8()?;
+            .expect("FATAL: no `text-handle`")
+            .expect_u128()?;
+
+        let text = with_globals(|globals| globals.load_large_string_utf8(text_handle)).ok_or_else(
+            || {
+                wrb_error!("Missing large UTF8 string with handle {}", text_handle);
+                Error::Wrb(format!(
+                    "Missing large UTF8 string with handle {}",
+                    text_handle
+                ))
+            },
+        )?;
 
         let cursor = match text_tuple
             .get("cursor")

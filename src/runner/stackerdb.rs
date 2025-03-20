@@ -42,6 +42,7 @@ use stacks_common::types::chainstate::StacksPrivateKey;
 use stacks_common::types::chainstate::StacksPublicKey;
 use stacks_common::util::hash::Hash160;
 
+use crate::storage::mock::LocalStackerDBClient;
 use crate::storage::StackerDBClient;
 
 #[cfg(test)]
@@ -579,6 +580,21 @@ impl Runner {
         contract: QualifiedContractIdentifier,
         _ignored: StacksPrivateKey,
     ) -> Result<Box<dyn StackerDBClient>, Error> {
+        if let Some(db_path) = self.mock_stackerdb_paths.get(&contract) {
+            // use DB on disk instead
+            if let Err(e) = std::fs::metadata(db_path) {
+                return Err(Error::FailedToRun(
+                    format!(
+                        "Failed to connect to mock StackerDB at '{}': {:?}",
+                        db_path, &e
+                    ),
+                    vec![],
+                ));
+            }
+            let mock_client = LocalStackerDBClient::open(db_path)?;
+            return Ok(Box::new(mock_client));
+        }
+
         let node_addr = self
             .resolve_node()
             .map_err(|e| {
@@ -601,6 +617,21 @@ impl Runner {
         contract: QualifiedContractIdentifier,
         _ignored: StacksPrivateKey,
     ) -> Result<Box<dyn StackerDBClient>, Error> {
+        if let Some(db_path) = self.mock_stackerdb_paths.get(&contract) {
+            // use DB on disk instead
+            if let Err(e) = std::fs::metadata(db_path) {
+                return Err(Error::FailedToRun(
+                    format!(
+                        "Failed to connect to mock StackerDB at '{}': {:?}",
+                        db_path, &e
+                    ),
+                    vec![],
+                ));
+            }
+            let mock_client = LocalStackerDBClient::open(db_path)?;
+            return Ok(Box::new(mock_client));
+        }
+
         let node_addr = self.find_stackerdb(&contract).map_err(|e| {
             Error::FailedToRun(
                 format!("Unable to find replica for {}", &contract),

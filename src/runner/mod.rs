@@ -25,6 +25,7 @@ use std::net::TcpStream;
 use std::net::ToSocketAddrs;
 
 use crate::runner::http::run_http_request;
+use rusqlite::Error as sqlite_error;
 
 use clarity::vm::types::QualifiedContractIdentifier;
 use clarity::vm::Value;
@@ -45,6 +46,10 @@ use clarity::vm::errors::Error as clarity_error;
 use clarity::vm::errors::InterpreterError as clarity_interpreter_error;
 
 use crate::net::NeighborAddress;
+
+use crate::util::sqlite::Error as DBError;
+
+use crate::storage::Error as StorageError;
 
 pub mod bns;
 pub mod http;
@@ -157,6 +162,7 @@ pub enum Error {
     RPCError(String),
     Storage(String),
     Clarity(String),
+    Database(String),
 }
 
 impl fmt::Display for Error {
@@ -187,6 +193,7 @@ impl fmt::Display for Error {
             Error::RPCError(ref msg) => write!(f, "RPC error: {}", msg),
             Error::Storage(ref msg) => write!(f, "Storage error: {}", msg),
             Error::Clarity(ref err) => write!(f, "Clarity error: {}", err),
+            Error::Database(ref err) => write!(f, "Database error: {}", err),
         }
     }
 }
@@ -211,6 +218,7 @@ impl error::Error for Error {
             Error::RPCError(_) => None,
             Error::Storage(_) => None,
             Error::Clarity(_) => None,
+            Error::Database(_) => None,
         }
     }
 }
@@ -233,12 +241,31 @@ impl From<clarity_interpreter_error> for Error {
     }
 }
 
+impl From<DBError> for Error {
+    fn from(e: DBError) -> Error {
+        Error::Database(format!("Database error: {:?}", &e))
+    }
+}
+
+impl From<sqlite_error> for Error {
+    fn from(e: sqlite_error) -> Error {
+        Error::Database(format!("Sqlite error: {:?}", &e))
+    }
+}
+
+impl From<StorageError> for Error {
+    fn from(e: StorageError) -> Error {
+        Error::Storage(format!("Storage error: {:?}", &e))
+    }
+}
+
 pub struct Runner {
     bns_contract_id: QualifiedContractIdentifier,
     zonefile_contract_id: QualifiedContractIdentifier,
     node_host: String,
     node_port: u16,
     node: Option<SocketAddr>,
+    mock_stackerdb_paths: HashMap<QualifiedContractIdentifier, String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -261,6 +288,30 @@ pub struct CallReadOnlyResponse {
 }
 
 impl Runner {
+    pub fn new(
+        bns_contract_id: QualifiedContractIdentifier,
+        zonefile_contract_id: QualifiedContractIdentifier,
+        node_host: String,
+        node_port: u16,
+    ) -> Runner {
+        Runner {
+            bns_contract_id,
+            zonefile_contract_id,
+            node_host,
+            node_port,
+            node: None,
+            mock_stackerdb_paths: HashMap::new(),
+        }
+    }
+
+    pub fn with_mock_stackerdb_paths(
+        mut self,
+        paths: HashMap<QualifiedContractIdentifier, String>,
+    ) -> Self {
+        self.mock_stackerdb_paths = paths;
+        self
+    }
+
     pub fn resolve_node(&mut self) -> Result<Option<SocketAddr>, Error> {
         if self.node.is_none() {
             let mut addrs: Vec<_> = (self.node_host.as_str(), self.node_port)

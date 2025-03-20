@@ -90,6 +90,12 @@ impl fmt::Display for CharCell {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum PrintPartType {
+    Word(String, u64),
+    Newline,
+}
+
 /// A buffer for holding characters that is a known number of columns wide
 #[derive(Clone, PartialEq, Debug)]
 pub struct CharBuff {
@@ -217,7 +223,8 @@ impl CharBuff {
         self.inner_print(element_id, start_row, start_col, bg, fg, text.chars(), true)
     }
 
-    /// Print word-wrapped text, optionally with a terminating newline
+    /// Print word-wrapped text, optionally with a terminating newline.
+    /// Honors internal newlines.
     /// Returns (end-row, end-col) where printing finished
     fn inner_print(
         &mut self,
@@ -236,11 +243,15 @@ impl CharBuff {
         for c in text {
             if c.is_whitespace() {
                 if cur_part.len() > 0 {
-                    parts.push((cur_part.clone(), cur_len));
+                    parts.push(PrintPartType::Word(cur_part.clone(), cur_len));
                     cur_part = String::new();
                     cur_len = 0;
                 }
-                parts.push((c.to_string(), 1));
+                if c == '\n' {
+                    parts.push(PrintPartType::Newline);
+                } else {
+                    parts.push(PrintPartType::Word(c.to_string(), 1));
+                }
             } else {
                 cur_part.push_str(&c.to_string());
                 cur_len += 1;
@@ -248,28 +259,36 @@ impl CharBuff {
         }
         // finish up
         if cur_part.len() > 0 {
-            parts.push((cur_part.clone(), cur_len));
+            parts.push(PrintPartType::Word(cur_part.clone(), cur_len));
         }
 
         let mut row = start_row;
         let mut idx = start_col;
         let mut ret = (start_row, start_col);
-        for (part, charlen) in parts {
-            if idx + charlen < self.num_cols {
-                // can write without wrap
-                ret = self.print_at(element_id, row, idx, bg, fg, &part);
-                idx += charlen;
-            } else {
-                // need to wrap
-                row += 1;
-                ret = self.print_at(element_id, row, 0, bg, fg, &part);
-                idx = charlen % self.num_cols;
-            }
+        for part_type in parts.into_iter() {
+            match part_type {
+                PrintPartType::Word(part, charlen) => {
+                    if idx + charlen < self.num_cols {
+                        // can write without wrap
+                        ret = self.print_at(element_id, row, idx, bg, fg, &part);
+                        idx += charlen;
+                    } else {
+                        // need to wrap
+                        row += 1;
+                        ret = self.print_at(element_id, row, 0, bg, fg, &part);
+                        idx = charlen % self.num_cols;
+                    }
 
-            // if part was too long to even fit into a row, then the word will have
-            // automatically wrapped around. Update row accordingly
-            if charlen / self.num_cols >= 1 {
-                row += charlen / self.num_cols;
+                    // if part was too long to even fit into a row, then the word will have
+                    // automatically wrapped around. Update row accordingly
+                    if charlen / self.num_cols >= 1 {
+                        row += charlen / self.num_cols;
+                    }
+                }
+                PrintPartType::Newline => {
+                    row += 1;
+                    idx = 0;
+                }
             }
         }
 
@@ -295,5 +314,23 @@ impl CharBuff {
                 CharCell::Blank => None,
             })
             .flatten()
+    }
+
+    pub(crate) fn dump_charbuff(charbuff: &CharBuff, num_rows: u64) -> String {
+        let mut output = String::new();
+        for row in 0..num_rows {
+            for col in 0..charbuff.num_cols {
+                if let Some(c) = charbuff.charcell_at(row, col) {
+                    match c {
+                        CharCell::Fill { value, .. } => output.push(value),
+                        CharCell::Blank => output.push('_'),
+                    }
+                } else {
+                    output.push('*');
+                }
+            }
+            output.push_str("\n");
+        }
+        output
     }
 }

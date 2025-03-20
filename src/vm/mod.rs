@@ -42,7 +42,7 @@ pub mod contracts;
 pub mod special;
 pub mod storage;
 
-pub use contracts::{BOOT_CODE, WRBLIB_CODE, WRB_CONTRACT, WRB_LOW_LEVEL_CONTRACT};
+pub use contracts::wrb_link_app;
 
 #[cfg(test)]
 pub mod tests;

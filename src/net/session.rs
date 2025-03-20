@@ -102,7 +102,7 @@ impl LocalPeer {
         key_expire: u64,
         data_url: UrlString,
     ) -> LocalPeer {
-        let mut pkey = privkey.unwrap_or(Secp256k1PrivateKey::new());
+        let mut pkey = privkey.unwrap_or(Secp256k1PrivateKey::random());
         pkey.set_compress_public(true);
 
         let mut rng = thread_rng();
@@ -251,7 +251,7 @@ impl NodeSession {
             peer_info.parent_network_id,
             PeerAddress::from_socketaddr(&replica_peer_addr),
             replica_peer_addr.port(),
-            Some(StacksPrivateKey::new()),
+            Some(StacksPrivateKey::random()),
             u64::MAX,
             UrlString::try_from(format!("http://127.0.0.1:{}", data_addr.port()).as_str()).unwrap(),
         );

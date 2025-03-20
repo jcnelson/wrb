@@ -31,6 +31,149 @@ fn render_charbuff(buff: &CharBuff) -> String {
     }
     output
 }
+
+#[test]
+fn test_render_charbuff_multiline() {
+    let mut charbuff = CharBuff::new(10);
+    charbuff.print(
+        100,
+        0,
+        0,
+        0x00000000.into(),
+        0x00ffffff.into(),
+        "Hello\nworld\n!",
+    );
+
+    assert_eq!(
+        charbuff,
+        CharBuff {
+            num_cols: 10,
+            cells: vec![
+                CharCell::Fill {
+                    value: 'H',
+                    bg: Color { r: 0, g: 0, b: 0 },
+                    fg: Color {
+                        r: 255,
+                        g: 255,
+                        b: 255
+                    },
+                    element_id: 100
+                },
+                CharCell::Fill {
+                    value: 'e',
+                    bg: Color { r: 0, g: 0, b: 0 },
+                    fg: Color {
+                        r: 255,
+                        g: 255,
+                        b: 255
+                    },
+                    element_id: 100
+                },
+                CharCell::Fill {
+                    value: 'l',
+                    bg: Color { r: 0, g: 0, b: 0 },
+                    fg: Color {
+                        r: 255,
+                        g: 255,
+                        b: 255
+                    },
+                    element_id: 100
+                },
+                CharCell::Fill {
+                    value: 'l',
+                    bg: Color { r: 0, g: 0, b: 0 },
+                    fg: Color {
+                        r: 255,
+                        g: 255,
+                        b: 255
+                    },
+                    element_id: 100
+                },
+                CharCell::Fill {
+                    value: 'o',
+                    bg: Color { r: 0, g: 0, b: 0 },
+                    fg: Color {
+                        r: 255,
+                        g: 255,
+                        b: 255
+                    },
+                    element_id: 100
+                },
+                CharCell::Blank,
+                CharCell::Blank,
+                CharCell::Blank,
+                CharCell::Blank,
+                CharCell::Blank,
+                CharCell::Fill {
+                    value: 'w',
+                    bg: Color { r: 0, g: 0, b: 0 },
+                    fg: Color {
+                        r: 255,
+                        g: 255,
+                        b: 255
+                    },
+                    element_id: 100
+                },
+                CharCell::Fill {
+                    value: 'o',
+                    bg: Color { r: 0, g: 0, b: 0 },
+                    fg: Color {
+                        r: 255,
+                        g: 255,
+                        b: 255
+                    },
+                    element_id: 100
+                },
+                CharCell::Fill {
+                    value: 'r',
+                    bg: Color { r: 0, g: 0, b: 0 },
+                    fg: Color {
+                        r: 255,
+                        g: 255,
+                        b: 255
+                    },
+                    element_id: 100
+                },
+                CharCell::Fill {
+                    value: 'l',
+                    bg: Color { r: 0, g: 0, b: 0 },
+                    fg: Color {
+                        r: 255,
+                        g: 255,
+                        b: 255
+                    },
+                    element_id: 100
+                },
+                CharCell::Fill {
+                    value: 'd',
+                    bg: Color { r: 0, g: 0, b: 0 },
+                    fg: Color {
+                        r: 255,
+                        g: 255,
+                        b: 255
+                    },
+                    element_id: 100
+                },
+                CharCell::Blank,
+                CharCell::Blank,
+                CharCell::Blank,
+                CharCell::Blank,
+                CharCell::Blank,
+                CharCell::Fill {
+                    value: '!',
+                    bg: Color { r: 0, g: 0, b: 0 },
+                    fg: Color {
+                        r: 255,
+                        g: 255,
+                        b: 255
+                    },
+                    element_id: 100
+                }
+            ]
+        }
+    );
+}
+
 #[test]
 fn test_render_charbuff() {
     let mut charbuff = CharBuff::new(80);

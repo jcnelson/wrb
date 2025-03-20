@@ -74,6 +74,9 @@ const KV_SCHEMA: &'static [&'static str] = &[
     );
     "#,
     r#"
+    CREATE INDEX IF NOT EXISTS by_key_and_height ON kvstore(key,height);
+    "#,
+    r#"
     INSERT INTO schema_version (version) VALUES (1);
     "#,
 ];

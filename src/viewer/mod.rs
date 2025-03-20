@@ -65,6 +65,7 @@ pub enum ViewerEvent {
     Stdin(Key),
     Root(Root),
     Update(FrameUpdate),
+    Quit,
 }
 
 pub struct Viewer {
@@ -188,10 +189,14 @@ impl Viewer {
     }
 
     /// Set the quit flag and set quit status text
-    fn set_quit(&mut self) {
-        self.quit.store(true, Ordering::SeqCst);
+    fn set_quit(&mut self, viewer_send: &Sender<ViewerEvent>) {
+        wrb_debug!("Set quit!");
         self.status
             .set_text("Done! Press any key to exit".to_string());
+        self.quit.store(true, Ordering::SeqCst);
+        if let Err(e) = viewer_send.send(ViewerEvent::Quit) {
+            wrb_warn!("Failed to send ViewerEvent::Quit to main thread: {:?}", &e);
+        }
     }
 
     fn update_focused_cursor<W: Write>(
@@ -211,12 +216,15 @@ impl Viewer {
         Ok(())
     }
 
+    /// Handle a keyboard event we received
+    /// Returns Ok(true) if we can continue
+    /// Returns Ok(false) otherwise.
     pub fn dispatch_keyboard_event<W: Write>(
         &mut self,
         key: Key,
         mut frame: Option<&mut Root>,
         stdout: &mut W,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         wrb_debug!("Got key in focus {:?}: {:?}", &self.focus, &key);
 
         // if we have no frame, then focus reverts to the Status widget
@@ -225,6 +233,7 @@ impl Viewer {
             self.set_status_focus(stdout)?;
         }
 
+        let mut ret = true;
         match self.focus {
             ViewerFocus::NoFocus => {
                 // interpret keys as commands
@@ -250,7 +259,7 @@ impl Viewer {
                         self.focus = ViewerFocus::Root;
                     }
                     Key::Char('q') => {
-                        self.set_quit();
+                        ret = false;
                     }
                     _ => {}
                 }
@@ -306,7 +315,7 @@ impl Viewer {
                 }
             },
         }
-        Ok(())
+        Ok(ret)
     }
 
     /// Keyboard reader thread
@@ -327,6 +336,7 @@ impl Viewer {
                     return;
                 }
             }
+            wrb_debug!("Keyboard thread exit");
         });
         handle
     }
@@ -344,28 +354,32 @@ impl Viewer {
                 };
                 match frame_data {
                     WrbFrameData::Root(root) => {
+                        wrb_debug!("Got new root!");
                         if frame_sender.send(ViewerEvent::Root(root)).is_err() {
                             return;
                         }
                     }
                     WrbFrameData::Update(update) => {
+                        wrb_debug!("Got root update!");
                         if frame_sender.send(ViewerEvent::Update(update)).is_err() {
                             return;
                         }
                     }
                 }
             }
+            wrb_debug!("Frame thread exit");
         });
         handle
     }
 
-    /// Render a frame. Saves it to last_frame
+    /// Render a frame (`root`). Saves it to self.last_frame
     fn render<W: Write>(&mut self, mut root: Root, screen: &mut W) -> Result<(), Error> {
         let status_text = self
             .status
             .render(self.focus == ViewerFocus::Status, self.size.1);
         let (root_rows, _) = self.get_root_size(self.size.0, self.size.1);
         let root_text = {
+            wrb_debug!("Render root! Num rows = {}", root_rows);
             let chars = root.render();
             let scanlines = Scanline::compile_rows(&chars, 0, root_rows);
             Renderer::scanlines_into_term_string(scanlines)
@@ -430,9 +444,28 @@ impl Viewer {
             Self::start_frame_thread(self.quit.clone(), frames_recv, viewer_send.clone());
 
         // request the page to be generated
+        wrb_debug!("Send WrbEvent::Open");
         if events_send.send(WrbEvent::Open).is_err() {
-            self.set_quit();
+            wrb_warn!("Failed to send WrbEvent::Open");
+            self.set_quit(&viewer_send);
         }
+
+        // send the initial terminal size
+        let sz = self.get_term_size()?;
+        let (root_rows, root_cols) = self.get_root_size(sz.0, sz.1);
+        wrb_debug!("Send WrbEvent::Resize({}, {})", root_rows, root_cols);
+        if events_send
+            .send(WrbEvent::Resize(root_rows, root_cols))
+            .is_err()
+        {
+            wrb_warn!(
+                "Failed to send WrbEvent::Resize({}, {})",
+                root_rows,
+                root_cols
+            );
+            self.set_quit(&viewer_send);
+        }
+        self.size = sz;
 
         let mut timer_thread = None;
 
@@ -440,11 +473,17 @@ impl Viewer {
             let sz = self.get_term_size()?;
             if sz != self.size {
                 let (root_rows, root_cols) = self.get_root_size(sz.0, sz.1);
+                wrb_debug!("Send WrbEvent::Resize({}, {})", root_rows, root_cols);
                 if events_send
                     .send(WrbEvent::Resize(root_rows, root_cols))
                     .is_err()
                 {
-                    self.set_quit();
+                    wrb_warn!(
+                        "Failed to send WrbEvent::Resize({}, {})",
+                        root_rows,
+                        root_cols
+                    );
+                    self.set_quit(&viewer_send);
                 }
 
                 self.size = sz;
@@ -453,11 +492,16 @@ impl Viewer {
             match viewer_recv.recv() {
                 Ok(ViewerEvent::Stdin(key)) => {
                     let mut last_frame = self.last_frame.take();
-                    self.dispatch_keyboard_event(key, last_frame.as_mut(), &mut screen)?;
+                    let do_continue =
+                        self.dispatch_keyboard_event(key, last_frame.as_mut(), &mut screen)?;
 
                     if let Some(mut frame) = last_frame {
                         frame.redraw()?;
                         self.render(frame, &mut screen)?;
+                    }
+
+                    if !do_continue {
+                        self.set_quit(&viewer_send);
                     }
                 }
                 Ok(ViewerEvent::Root(root)) => {
@@ -469,6 +513,7 @@ impl Viewer {
                             // begin sending wakeup events to the main loop
                             let event_sender = events_send.clone();
                             timer_thread = Some(thread::spawn(move || loop {
+                                wrb_debug!("Send WrbEvent::Timer");
                                 if event_sender.send(WrbEvent::Timer).is_err() {
                                     break;
                                 }
@@ -481,28 +526,47 @@ impl Viewer {
                 }
                 Ok(ViewerEvent::Update(update)) => {
                     if let Some(mut last_frame) = self.last_frame.take() {
+                        wrb_debug!("Update new forms!");
                         last_frame.update_forms(update)?;
                         self.render(last_frame, &mut screen)?;
                     }
                 }
+                Ok(ViewerEvent::Quit) => {
+                    wrb_debug!("Got VewerEvent::Quit event");
+                    break;
+                }
                 Err(e) => {
                     wrb_debug!("Exiting viewer loop: {:?}", &e);
-                    self.set_quit();
+                    self.set_quit(&viewer_send);
+                }
+            }
+
+            // consume any emitted runtime events
+            let new_runtime_events = self
+                .last_frame
+                .as_mut()
+                .map(|frame| frame.consume_runtime_events())
+                .unwrap_or(vec![]);
+
+            for new_runtime_event in new_runtime_events.into_iter() {
+                if events_send.send(new_runtime_event.clone()).is_err() {
+                    wrb_warn!("Failed to send {:?}", &new_runtime_event);
                 }
             }
         }
-
-        wrb_debug!("Viewer main exit");
-
+        wrb_debug!("Send WrbEvent::Close");
         let _ = events_send.send(WrbEvent::Close);
 
         if let Some(timer_thread) = timer_thread.take() {
             let _ = timer_thread.join();
         }
-        let _ = keyboard_thread.join();
         let _ = frame_thread.join();
 
+        // interrupt stdin read
+        // let _ = keyboard_thread.join();
         self.show_cursor(&mut screen)?;
+
+        wrb_debug!("Viewer main exit");
         Ok(())
     }
 }

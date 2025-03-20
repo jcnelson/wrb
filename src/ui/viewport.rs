@@ -375,4 +375,19 @@ impl Viewport {
     pub fn clear(&mut self) {
         self.buff.clear()
     }
+
+    /// Update settings from a newly-loaded viewport.
+    /// Also clears the viewport
+    pub fn merge_update(&mut self, vp: &Viewport) {
+        self.start_row = vp.start_row;
+        self.start_col = vp.start_col;
+        self.num_rows = vp.num_rows;
+        self.visible = vp.visible;
+        self.buff = CharBuff::new(vp.buff.num_cols);
+    }
+
+    /// Dump the viewport contents
+    pub fn dump_viewport(&self) -> String {
+        CharBuff::dump_charbuff(&self.buff, self.num_rows)
+    }
 }

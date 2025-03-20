@@ -35,11 +35,15 @@ use stacks_common::util::hash::to_hex;
 use stacks_common::util::hash::Hash160;
 
 impl Renderer {
-    pub fn run_test_query_code(&self, vm: &mut ClarityVM, code: &str) -> Result<Vec<Value>, Error> {
+    pub fn run_test_query_code(
+        &mut self,
+        vm: &mut ClarityVM,
+        code: &str,
+    ) -> Result<Vec<Value>, Error> {
+        let main_code_id = vm.initialize_app(code)?;
+
         let headers_db = vm.headers_db();
-        let main_code_id = vm.get_code_id();
-        let code_hash = Hash160::from_data(code.as_bytes());
-        let mut wrb_tx = vm.begin_page_load(&code_hash).unwrap();
+        let mut wrb_tx = vm.begin_page_load()?;
 
         let mut db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
         db.begin();
@@ -84,68 +88,68 @@ fn test_render_viewports_raw_text() {
 (wrb-viewport u0 u5 u5 u25 u25)
 (wrb-viewport u1 u20 u20 u25 u25)
 (wrb-viewport u2 u35 u35 u25 u25)
-(wrb-static-txt u0 u0 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u1 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u2 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u3 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u4 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u5 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u6 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u7 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u8 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u9 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u10 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u11 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u12 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u13 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u14 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u15 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u16 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u17 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u18 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
-(wrb-static-txt u0 u19 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u0 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u1 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u2 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u3 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u4 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u5 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u6 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u7 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u8 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u9 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u10 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u11 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u12 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u13 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u14 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u15 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u16 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u17 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u18 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
+(wrb-static-txt-immediate u0 u19 u0 u0 (buff-to-uint-be 0x0000ff) u"hello world blue")
 
-(wrb-static-txt u1 u0 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u1 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u2 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u3 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u4 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u5 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u6 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u7 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u8 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u9 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u10 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u11 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u12 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u13 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u14 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u15 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u16 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u17 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u18 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
-(wrb-static-txt u1 u19 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u0 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u1 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u2 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u3 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u4 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u5 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u6 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u7 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u8 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u9 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u10 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u11 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u12 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u13 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u14 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u15 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u16 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u17 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u18 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
+(wrb-static-txt-immediate u1 u19 u0 u0 (buff-to-uint-be 0x00ff00) u"hello world green")
 
-(wrb-static-txt u2 u0 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u1 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u2 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u3 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u4 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u5 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u6 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u7 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u8 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u9 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u10 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u11 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u12 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u13 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u14 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u15 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u16 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u17 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u18 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
-(wrb-static-txt u2 u19 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u0 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u1 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u2 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u3 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u4 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u5 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u6 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u7 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u8 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u9 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u10 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u11 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u12 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u13 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u14 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u15 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u16 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u17 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u18 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
+(wrb-static-txt-immediate u2 u19 u0 u0 (buff-to-uint-be 0xff0000) u"hello world red")
 "#;
     let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
 
@@ -175,17 +179,17 @@ fn test_render_viewports_wrapped_text() {
 (wrb-viewport u1 u20 u20 u25 u25)
 (wrb-viewport u2 u35 u35 u25 u25)
 
-(wrb-static-print u0 none u0 (buff-to-uint-be 0x0000ff) u"This is the blue song that never ends.  ")
-(wrb-static-print u1 none u0 (buff-to-uint-be 0x00ff00) u"This is the green song that never ends.  ")
-(wrb-static-print u2 none u0 (buff-to-uint-be 0xff0000) u"This is the red song that never ends.  ")
+(wrb-static-print-immediate u0 none u0 (buff-to-uint-be 0x0000ff) u"This is the blue song that never ends.  ")
+(wrb-static-print-immediate u1 none u0 (buff-to-uint-be 0x00ff00) u"This is the green song that never ends.  ")
+(wrb-static-print-immediate u2 none u0 (buff-to-uint-be 0xff0000) u"This is the red song that never ends.  ")
 
-(wrb-static-println u0 none u0 (buff-to-uint-be 0x0000ff) u"Yes, it goes on and on, my friends.")
-(wrb-static-println u1 none u0 (buff-to-uint-be 0x00ff00) u"Yes, it goes on and on, my friends.")
-(wrb-static-println u2 none u0 (buff-to-uint-be 0xff0000) u"Yes, it goes on and on, my friends.")
+(wrb-static-println-immediate u0 none u0 (buff-to-uint-be 0x0000ff) u"Yes, it goes on and on, my friends.")
+(wrb-static-println-immediate u1 none u0 (buff-to-uint-be 0x00ff00) u"Yes, it goes on and on, my friends.")
+(wrb-static-println-immediate u2 none u0 (buff-to-uint-be 0xff0000) u"Yes, it goes on and on, my friends.")
 
-(wrb-static-print u0 none u0 (buff-to-uint-be 0x0000ff) u"Some people started signing it, not knowing what it was...")
-(wrb-static-print u1 none u0 (buff-to-uint-be 0x00ff00) u"Some people started signing it, not knowing what it was...")
-(wrb-static-print u2 none u0 (buff-to-uint-be 0xff0000) u"Some people started singing it, not knowing what it was...")
+(wrb-static-print-immediate u0 none u0 (buff-to-uint-be 0x0000ff) u"Some people started signing it, not knowing what it was...")
+(wrb-static-print-immediate u1 none u0 (buff-to-uint-be 0x00ff00) u"Some people started signing it, not knowing what it was...")
+(wrb-static-print-immediate u2 none u0 (buff-to-uint-be 0xff0000) u"Some people started singing it, not knowing what it was...")
 "#;
 
     let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
@@ -338,4 +342,27 @@ fn test_render_viewport_checkbox() {
 
     println!("{:?}", &s);
     assert_eq!(s, "                    \n                    \n                    \n                    \n                    \n                    \n                    \n                    \n                    \n                    \n          [ ] option\n          [*] option\n          [ ] looooo\n          oooooooooo\n          oooooooong\n                    \n                    \n                    \n                    \n                    ");
+}
+
+#[test]
+fn test_render_load_store_large_strings() {
+    core::init(true, "localhost", 20443);
+
+    let db_path = "/tmp/wrb-load-store-large-string-utf8";
+    if fs::metadata(&db_path).is_ok() {
+        fs::remove_dir_all(&db_path).unwrap();
+    }
+
+    let code = r#"
+    (wrb-store-large-string-utf8 u0 u"hello world")
+    (asserts! (is-eq (wrb-load-large-string-utf8 u0)) (some u"hello world"))
+    (asserts! (is-eq (wrb-load-large-string-utf8 u1)) none)
+    "#;
+
+    let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
+
+    let mut vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
+    let mut renderer = Renderer::new(1_000_000_000);
+    let s = renderer.eval_to_text(&mut vm, &bytes).unwrap();
+    println!("text '{}'", &s);
 }

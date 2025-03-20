@@ -70,6 +70,8 @@ pub enum Error {
     Page(String),
     /// Event error
     Event(String),
+    /// WRB runtime error
+    Wrb(String),
 }
 
 impl fmt::Display for Error {
@@ -84,6 +86,7 @@ impl fmt::Display for Error {
             Error::DB(ref dbe) => dbe.fmt(f),
             Error::Page(ref msg) => write!(f, "{}", msg),
             Error::Event(ref msg) => write!(f, "{}", msg),
+            Error::Wrb(ref msg) => write!(f, "{}", msg),
         }
     }
 }
@@ -100,6 +103,7 @@ impl error::Error for Error {
             Error::DB(ref dbe) => Some(dbe),
             Error::Page(..) => None,
             Error::Event(..) => None,
+            Error::Wrb(..) => None,
         }
     }
 }

@@ -39,6 +39,7 @@ use crate::core;
 use crate::core::Config;
 use crate::runner::Runner;
 
+mod mock;
 mod wrbpod;
 
 #[derive(Clone)]
@@ -171,7 +172,7 @@ impl StackerDBClient for MockStackerDBClient {
 
 #[test]
 fn test_mock_stackerdb() {
-    let mut mock_stackerdb = MockStackerDBClient::new(StacksPrivateKey::new(), 3);
+    let mut mock_stackerdb = MockStackerDBClient::new(StacksPrivateKey::random(), 3);
     assert_eq!(
         mock_stackerdb.list_chunks().unwrap(),
         vec![
@@ -191,7 +192,7 @@ fn test_mock_stackerdb() {
         vec![None, None, None]
     );
 
-    let privk = StacksPrivateKey::new();
+    let privk = StacksPrivateKey::random();
     let mut chunk = StackerDBChunkData::new(0, 0, vec![1, 2, 3, 4, 5]);
     chunk.sign(&privk).unwrap();
 

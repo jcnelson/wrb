@@ -423,7 +423,7 @@ fn test_root_focus_order() {
     let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
 
     let mut vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
-    let renderer = Renderer::new(1_000_000_000);
+    let mut renderer = Renderer::new(1_000_000_000);
     let mut root = renderer.eval_root(&mut vm, &bytes).unwrap();
     root.refresh();
 
@@ -442,7 +442,7 @@ fn test_root_focus_order() {
         .run_test_query_code(&mut vm, qry)
         .unwrap()
         .into_iter()
-        .map(|val| val.expect_result_ok().unwrap().expect_u128().unwrap())
+        .map(|val| val.expect_u128().unwrap())
         .collect();
 
     eprintln!("button_ids = {:?}", &button_ids);

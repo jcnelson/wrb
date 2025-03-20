@@ -203,6 +203,6 @@ impl WrbForm for Button {
         }
 
         // indicate that we've been pressed
-        Ok(Some(Value::UInt(self.element_id)))
+        Ok(Some(Value::Bool(true)))
     }
 }

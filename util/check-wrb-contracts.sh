@@ -25,13 +25,11 @@ function do_checks() {
    clarity-cli launch "$FULL_CONTRACT_NAME" "$CONTRACT" "$DB_PATH"
 }
 
-for CONTRACT_FILENAME in "wrb-ll.clar" "wrb.clar" "wrblib.clar"; do
-    do_checks "$CONTRACTS/$CONTRACT_FILENAME"
-done
+do_checks "$CONTRACTS/wrb-ll.clar"
 
 for arg in $@; do
     # link in wrblib
-    cat "$CONTRACTS/wrblib.clar" > "$arg.linked"
+    cat "$CONTRACTS/wrb.clar" > "$arg.linked"
     echo ";; =========== END OF WRBLIB ================" >> "$arg.linked"
     cat "$arg" >> "$arg.linked"
     do_checks "$arg.linked"

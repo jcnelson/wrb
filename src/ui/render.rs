@@ -28,10 +28,15 @@ use crate::ui::Error;
 use crate::util::{DEFAULT_CHAIN_ID, DEFAULT_WRB_CLARITY_VERSION, DEFAULT_WRB_EPOCH};
 use crate::vm::storage::WritableWrbStore;
 
+use crate::core::with_globals;
+use crate::ui::ValueExtensions;
+
 use clarity::vm::analysis;
 use clarity::vm::analysis::CheckErrors;
 use clarity::vm::ast::ASTRules;
+use clarity::vm::contexts::ContractContext;
 use clarity::vm::contexts::OwnedEnvironment;
+use clarity::vm::contracts::Contract;
 use clarity::vm::costs::LimitedCostTracker;
 use clarity::vm::events::{SmartContractEventData, StacksTransactionEvent};
 use clarity::vm::types::QualifiedContractIdentifier;
@@ -42,8 +47,7 @@ use clarity::vm::SymbolicExpression;
 use crate::vm::ClarityStorage;
 
 use crate::vm::{
-    clarity_vm::parse as clarity_parse, clarity_vm::run_analysis_free as clarity_analyze,
-    ClarityVM, WRBLIB_CODE,
+    clarity_vm::parse as clarity_parse, clarity_vm::run_analysis_free as clarity_analyze, ClarityVM,
 };
 
 use clarity::vm::database::{HeadersDB, NULL_BURN_STATE_DB};
@@ -114,74 +118,33 @@ impl Renderer {
         Ok(output)
     }
 
-    /// Instantiate the main code.
-    /// `code` needs to have wrblib linked into it.
-    /// On success, asmart contract with the given identifier is instantiated.
-    pub(crate) fn initialize_main(
-        &self,
-        wrb_tx: &mut WritableWrbStore,
-        headers_db: &dyn HeadersDB,
-        code_id: &QualifiedContractIdentifier,
-        code: &str,
-    ) -> Result<(), Error> {
-        wrb_test_debug!("main (linked) code = '{}'", code);
-        let mut main_exprs = clarity_parse(code_id, &code)?;
-
-        wrb_debug!("Analyze contract {}", &code_id);
-        match clarity_analyze(code_id, &mut main_exprs, wrb_tx, true) {
-            Ok(_) => {}
-            Err((e, _)) => match e.err {
-                CheckErrors::ContractAlreadyExists(..) => {
-                    wrb_debug!("Contract already exists: {}", &code_id);
-                    return Ok(());
-                }
-                _ => {
-                    wrb_warn!("Failed to analyze contract {}: {:?}", code_id, &e);
-                    return Err(Error::Clarity(clarity_error::Unchecked(e.err)));
-                }
-            },
-        };
-
-        wrb_debug!("Deploy contract {}", code_id);
-
-        let mut db = wrb_tx.get_clarity_db(headers_db, &NULL_BURN_STATE_DB);
-        db.begin();
-        let mut vm_env = OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
-        vm_env.initialize_versioned_contract(
-            code_id.clone(),
-            DEFAULT_WRB_CLARITY_VERSION,
-            code,
-            None,
-            ASTRules::PrecheckSize,
-        )?;
-
-        let (mut db, _) = vm_env
-            .destruct()
-            .expect("Failed to recover database reference after executing transaction");
-
-        db.commit()?;
-        Ok(())
-    }
-
     /// Run code to query the system state.
     /// `code` should print out Values.  These Values will be extracted and returned.
     pub(crate) fn run_query_code(
-        &self,
+        &mut self,
         vm_env: &mut OwnedEnvironment,
         main_code_id: &QualifiedContractIdentifier,
         code: &str,
     ) -> Result<Vec<Value>, Error> {
-        let (contract, _, _) = vm_env
-            .execute_in_env(
-                StandardPrincipalData::transient().into(),
-                None,
-                None,
-                |env| env.global_context.database.get_contract(main_code_id),
-            )
-            .map_err(|e| {
-                wrb_error!("Failed to get contract '{}': {:?}", &main_code_id, &e);
-                e
-            })?;
+        let contract = if let Some(main_contract) =
+            with_globals(|globals| globals.load_cached_contract(main_code_id))
+        {
+            main_contract
+        } else {
+            let (contract, _, _) = vm_env
+                .execute_in_env(
+                    StandardPrincipalData::transient().into(),
+                    None,
+                    None,
+                    |env| env.global_context.database.get_contract(main_code_id),
+                )
+                .map_err(|e| {
+                    wrb_error!("Failed to get contract '{}': {:?}", &main_code_id, &e);
+                    e
+                })?;
+
+            with_globals(|globals| globals.store_cached_contract(main_code_id.clone(), contract))
+        };
 
         let (_, _, events) = vm_env
             .execute_in_env(
@@ -215,7 +178,7 @@ impl Renderer {
 
     /// Get all the viewports, arranged into a scene graph
     fn get_viewports(
-        &self,
+        &mut self,
         vm_env: &mut OwnedEnvironment,
         main_code_id: &QualifiedContractIdentifier,
     ) -> Result<SceneGraph, Error> {
@@ -254,7 +217,7 @@ impl Renderer {
 
     /// Get the static contents
     fn get_static_ui_contents(
-        &self,
+        &mut self,
         vm_env: &mut OwnedEnvironment,
         main_code_id: &QualifiedContractIdentifier,
     ) -> Result<Vec<Box<dyn WrbForm>>, Error> {
@@ -307,8 +270,17 @@ impl Renderer {
                         .expect("FATAL: expected one result")
                         .expect_optional()?
                         .expect("FATAL: raw text UI element not defined at defined index");
+                    let ui_tuple = viewport_text_value.expect_tuple()?;
+                    let handle = ui_tuple
+                        .get("text-handle")
+                        .cloned()
+                        .expect("Missing `text-handle`")
+                        .expect_u128()?;
 
-                    let raw_text = RawText::from_clarity_value(viewport_id, viewport_text_value)?;
+                    self.load_and_cache_large_string(vm_env, main_code_id, handle)?;
+
+                    let raw_text =
+                        RawText::from_clarity_value(viewport_id, Value::Tuple(ui_tuple))?;
                     ui_contents.push(Box::new(raw_text));
                 }
                 WrbFormTypes::Print => {
@@ -320,9 +292,17 @@ impl Renderer {
                         .expect("FATAL: expected one result")
                         .expect_optional()?
                         .expect("FATAL: raw text UI element not defined at defined index");
+                    let ui_tuple = viewport_print_value.expect_tuple()?;
+                    let handle = ui_tuple
+                        .get("text-handle")
+                        .cloned()
+                        .expect("Missing `text-handle`")
+                        .expect_u128()?;
+
+                    self.load_and_cache_large_string(vm_env, main_code_id, handle)?;
 
                     let print_text =
-                        PrintText::from_clarity_value(viewport_id, viewport_print_value)?;
+                        PrintText::from_clarity_value(viewport_id, Value::Tuple(ui_tuple))?;
                     ui_contents.push(Box::new(print_text));
                 }
                 WrbFormTypes::Button => {
@@ -385,107 +365,147 @@ impl Renderer {
         Ok(ui_contents)
     }
 
-    /// Get the dynamic contents for each viewport
-    fn get_dynamic_ui_contents(
-        &self,
+    /// Load and cache any needed large strings
+    fn load_and_cache_large_string(
+        &mut self,
         vm_env: &mut OwnedEnvironment,
         main_code_id: &QualifiedContractIdentifier,
-        viewports: &[Viewport],
+        handle: u128,
+    ) -> Result<(), Error> {
+        if with_globals(|globals| globals.load_large_string_utf8(handle)).is_none() {
+            let large_string_opt = self
+                .run_query_code(
+                    vm_env,
+                    main_code_id,
+                    &format!(
+                        "(print (wrb-internal-cache-bypass-load-large-string-utf8 u{}))",
+                        handle
+                    ),
+                )?
+                .pop()
+                .expect("FATAL: expected one result")
+                .expect_optional()?
+                .map(|s_value| s_value.expect_utf8())
+                .transpose()?;
+
+            if let Some(large_string) = large_string_opt {
+                with_globals(|globals| globals.store_large_string_utf8(handle, large_string));
+            }
+        }
+        Ok(())
+    }
+
+    /// Get the dynamic contents for each viewport
+    fn get_dynamic_ui_contents(
+        &mut self,
+        vm_env: &mut OwnedEnvironment,
+        main_code_id: &QualifiedContractIdentifier,
     ) -> Result<Vec<Box<dyn WrbForm>>, Error> {
         // get the elements in viewport order
         let mut ui_contents: Vec<Box<dyn WrbForm>> = vec![];
-        for vp in viewports {
-            let qry = format!("(print (wrb-dynamic-ui-index-start u{}))", vp.id);
-            let index_start = self
-                .run_query_code(vm_env, main_code_id, &qry)?
-                .pop()
-                .expect("FATAL: expected one result")
+
+        // index viewports
+        // text elements
+        let qry = "(print (wrb-dynamic-ui-get-text-elements))".to_string();
+        let text_ui_list = self
+            .run_query_code(vm_env, main_code_id, &qry)?
+            .pop()
+            .expect("FATAL: expected one result")
+            .expect_list()?;
+
+        for text_ui_elem in text_ui_list.into_iter() {
+            let text_ui_tuple = text_ui_elem.expect_tuple()?;
+            let text_ui_viewport_id = text_ui_tuple
+                .get("viewport-id")
+                .cloned()
+                .expect("Missing 'viewport-id'")
                 .expect_u128()?;
 
-            let qry = format!("(print (wrb-dynamic-ui-index-end u{}))", vp.id);
-            let index_end = self
-                .run_query_code(vm_env, main_code_id, &qry)?
-                .pop()
-                .expect("FATAL: expected one result")
+            let handle = text_ui_tuple
+                .get("text-handle")
+                .cloned()
+                .expect("Missing `text-handle`")
                 .expect_u128()?;
 
-            wrb_debug!(
-                "Dynamic viewport id={} UI indexes {}..{}",
-                vp.id,
-                index_start,
-                index_end
-            );
-            for ui_index in index_start..index_end {
-                let qry = format!("(print (wrb-dynamic-ui-pointer u{} u{}))", vp.id, ui_index);
-                let Some(ptr_tuple) = self
-                    .run_query_code(vm_env, main_code_id, &qry)?
-                    .pop()
-                    .expect("FATAL: expected one result")
-                    .expect_optional()?
-                    .map(|tuple_value| tuple_value.expect_tuple())
-                    .transpose()?
-                else {
-                    continue;
-                };
+            self.load_and_cache_large_string(vm_env, main_code_id, handle)?;
+            let raw_text =
+                RawText::from_clarity_value(text_ui_viewport_id, Value::Tuple(text_ui_tuple))?;
+            ui_contents.push(Box::new(raw_text));
+        }
 
-                let ui_type = ptr_tuple
-                    .get("type")
-                    .cloned()
-                    .expect("missing `type`")
-                    .expect_u128()?;
+        // print/println statements
+        let qry = "(print (wrb-dynamic-ui-get-print-elements))".to_string();
+        let print_ui_list = self
+            .run_query_code(vm_env, main_code_id, &qry)?
+            .pop()
+            .expect("FATAL: expected one result")
+            .expect_list()?;
 
-                let ui_index = ptr_tuple
-                    .get("ui-index")
-                    .cloned()
-                    .expect("missing `ui-index`")
-                    .expect_u128()?;
+        for print_ui_elem in print_ui_list.into_iter() {
+            let print_ui_tuple = print_ui_elem.expect_tuple()?;
+            let print_ui_viewport_id = print_ui_tuple
+                .get("viewport-id")
+                .cloned()
+                .expect("Missing 'viewport-id'")
+                .expect_u128()?;
 
-                let Ok(ui_type) = WrbFormTypes::try_from(ui_type) else {
-                    wrb_warn!("Unsupported UI element type {}", ui_type);
-                    continue;
-                };
-                match ui_type {
-                    WrbFormTypes::Text => {
-                        // go get the text
-                        let qry =
-                            format!("(print (wrb-dynamic-ui-get-text-element u{}))", ui_index);
-                        let viewport_text_value = self
-                            .run_query_code(vm_env, main_code_id, &qry)?
-                            .pop()
-                            .expect("FATAL: expected one result")
-                            .expect_optional()?
-                            .expect("FATAL: raw text UI element not defined at defined index");
+            let handle = print_ui_tuple
+                .get("text-handle")
+                .cloned()
+                .expect("Missing `text-handle`")
+                .expect_u128()?;
 
-                        let raw_text = RawText::from_clarity_value(vp.id, viewport_text_value)?;
-                        ui_contents.push(Box::new(raw_text));
-                    }
-                    WrbFormTypes::Print => {
-                        // go get the print/println
-                        let qry =
-                            format!("(print (wrb-dynamic-ui-get-print-element u{}))", ui_index);
-                        let viewport_print_value = self
-                            .run_query_code(vm_env, main_code_id, &qry)?
-                            .pop()
-                            .expect("FATAL: expected one result")
-                            .expect_optional()?
-                            .expect("FATAL: raw text UI element not defined at defined index");
-
-                        let print_text =
-                            PrintText::from_clarity_value(vp.id, viewport_print_value)?;
-                        ui_contents.push(Box::new(print_text));
-                    }
-                    _ => {
-                        wrb_warn!("No logic to render UI element type {:?} (index {}) -- use the specific method to do this.", ui_type, ui_index);
-                    }
-                }
-            }
+            self.load_and_cache_large_string(vm_env, main_code_id, handle)?;
+            let print_text =
+                PrintText::from_clarity_value(print_ui_viewport_id, Value::Tuple(print_ui_tuple))?;
+            ui_contents.push(Box::new(print_text));
         }
         Ok(ui_contents)
     }
 
+    /// Get updated viewports
+    fn get_updated_viewports(
+        &mut self,
+        vm_env: &mut OwnedEnvironment,
+        main_code_id: &QualifiedContractIdentifier,
+    ) -> Result<Vec<Viewport>, Error> {
+        let mut updated_viewports = vec![];
+
+        // get updated viewport IDs
+        let qry = "(print (wrb-take-viewport-updates))";
+        let viewport_id_list: Vec<u128> = self
+            .run_query_code(vm_env, main_code_id, &qry)?
+            .pop()
+            .expect("FATAL: expected one result")
+            .expect_list()?
+            .into_iter()
+            .filter_map(|val| val.expect_u128().ok())
+            .collect();
+
+        for viewport_id in viewport_id_list.into_iter() {
+            let qry = format!("(print (wrb-get-viewport u{}))", viewport_id);
+            let viewport_tuple_opt = self
+                .run_query_code(vm_env, main_code_id, &qry)?
+                .pop()
+                .expect("FATAL: expected one value")
+                .expect_optional()?;
+
+            let Some(viewport_val) = viewport_tuple_opt else {
+                continue;
+            };
+
+            wrb_debug!("viewport: {:?}", &viewport_val);
+            let viewport = Viewport::from_clarity_value(viewport_val)?;
+            wrb_test_debug!("loaded updated viewport: {:?}", &viewport);
+
+            updated_viewports.push(viewport);
+        }
+        Ok(updated_viewports)
+    }
+
     /// Compute the root pane from scratch
     pub(crate) fn make_root(
-        &self,
+        &mut self,
         vm_env: &mut OwnedEnvironment,
         main_code_id: &QualifiedContractIdentifier,
     ) -> Result<Root, Error> {
@@ -525,22 +545,22 @@ impl Renderer {
             .expect("FATAL: `wrb-get-root` failed to produce output")?;
 
         let static_ui_contents = self.get_static_ui_contents(vm_env, main_code_id)?;
-        let dynamic_ui_contents =
-            self.get_dynamic_ui_contents(vm_env, main_code_id, root.viewports())?;
+        let dynamic_ui_contents = self.get_dynamic_ui_contents(vm_env, main_code_id)?;
         root.set_all_forms(static_ui_contents, dynamic_ui_contents)?;
         Ok(root)
     }
 
     /// Compute new data for a root
     pub(crate) fn make_root_update(
-        &self,
+        &mut self,
         vm_env: &mut OwnedEnvironment,
         main_code_id: &QualifiedContractIdentifier,
-        viewports: &[Viewport],
     ) -> Result<FrameUpdate, Error> {
-        let dynamic_ui_contents = self.get_dynamic_ui_contents(vm_env, main_code_id, viewports)?;
+        let dynamic_ui_contents = self.get_dynamic_ui_contents(vm_env, main_code_id)?;
+        let updated_viewports = self.get_updated_viewports(vm_env, main_code_id)?;
         Ok(FrameUpdate {
             new_contents: dynamic_ui_contents,
+            updated_viewports,
         })
     }
 
@@ -562,7 +582,11 @@ impl Renderer {
 
     /// Decode the decompressed bytes into Clarity code, run it, and evaluate it into a root
     /// pane.  Does one pass of the event loop and returns the single Root
-    pub fn eval_root(&self, vm: &mut ClarityVM, compressed_input: &[u8]) -> Result<Root, Error> {
+    pub fn eval_root(
+        &mut self,
+        vm: &mut ClarityVM,
+        compressed_input: &[u8],
+    ) -> Result<Root, Error> {
         let (render_channels, ui_channels) = WrbChannels::new();
         ui_channels.next_event(WrbEvent::Close);
         self.run_page(vm, compressed_input, render_channels)?;

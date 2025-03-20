@@ -39,7 +39,7 @@ use stacks_common::util::hash::Hash160;
 
 fn run_page(
     mut vm: ClarityVM,
-    renderer: Renderer,
+    mut renderer: Renderer,
     code: &str,
     events: Vec<WrbEvent>,
 ) -> Result<(Vec<WrbFrameData>, Option<Value>), ui::Error> {
@@ -84,20 +84,13 @@ fn test_wrb_event_loop_setup() {
 (wrb-event-loop-time u100)
 "#;
 
-    let bytes = Renderer::encode_bytes(code.as_bytes()).unwrap();
-    let linked_code = Renderer::wrb_link(&code);
-
     let mut vm = ClarityVM::new(db_path, "foo.btc", 1).unwrap();
-    let renderer = Renderer::new(1_000_000_000);
+    let mut renderer = Renderer::new(1_000_000_000);
 
-    let main_code_id = vm.get_code_id();
+    let main_code_id = vm.initialize_app(&code).unwrap();
+
     let headers_db = vm.headers_db();
-    let code_hash = Hash160::from_data(&bytes);
-    let mut wrb_tx = vm.begin_page_load(&code_hash).unwrap();
-
-    renderer
-        .initialize_main(&mut wrb_tx, &headers_db, &main_code_id, &linked_code)
-        .unwrap();
+    let mut wrb_tx = vm.begin_page_load().unwrap();
 
     assert_eq!(
         renderer
@@ -190,8 +183,8 @@ fn test_render_dynamic_text() {
         (count (var-get event-count))
     )
     (var-set event-count (+ u1 count))
-    (try! (wrb-viewport-clear u0))
-    (try! (wrb-txt u0 u0 count u0 (buff-to-uint-le 0xffffff) (concat u"hello world: " (int-to-utf8 count))))
+    (wrb-viewport-clear u0)
+    (wrb-txt-immediate u0 u0 count u0 (buff-to-uint-le 0xffffff) (concat u"hello world: " (int-to-utf8 count)))
     (ok (var-get event-count))))
 
 (wrb-event-loop "main")

@@ -23,6 +23,8 @@ use clarity::vm::Value;
 
 use crate::ui::forms::{WrbForm, WrbFormEvent, WrbFormTypes};
 
+use crate::core::with_globals;
+
 /// UI command to add text to a viewport
 #[derive(Clone, PartialEq, Debug)]
 pub struct RawText {
@@ -55,11 +57,21 @@ impl WrbForm for RawText {
     /// construct from Clarity value
     fn from_clarity_value(viewport_id: u128, v: Value) -> Result<Self, Error> {
         let text_tuple = v.expect_tuple()?;
-        let text = text_tuple
-            .get("text")
+        let text_handle = text_tuple
+            .get("text-handle")
             .cloned()
-            .expect("FATAL: no `text`")
-            .expect_utf8()?;
+            .expect("FATAL: no `text-handle`")
+            .expect_u128()?;
+
+        let text = with_globals(|globals| globals.load_large_string_utf8(text_handle)).ok_or_else(
+            || {
+                wrb_error!("Missing large UTF8 string with handle {}", text_handle);
+                Error::Wrb(format!(
+                    "Missing large UTF8 string with handle {}",
+                    text_handle
+                ))
+            },
+        )?;
 
         let row = text_tuple
             .get("row")
@@ -118,6 +130,12 @@ impl WrbForm for RawText {
         let Some(viewport) = root.viewport_mut(self.viewport_id) else {
             return Err(Error::NoViewport(self.viewport_id));
         };
+        wrb_debug!(
+            "Render RawText form {} to viewport {}: '{}'",
+            &self.element_id,
+            self.viewport_id,
+            &self.text
+        );
         let new_cursor = viewport.print_to(
             self.element_id,
             self.row,

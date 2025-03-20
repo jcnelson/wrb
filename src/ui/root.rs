@@ -28,6 +28,8 @@ use crate::ui::forms::WrbFormEvent;
 use crate::ui::viewport::Viewport;
 use crate::ui::Error;
 
+use crate::ui::events::WrbEvent;
+
 use clarity::vm::Value;
 
 #[derive(Debug, Clone)]
@@ -228,12 +230,17 @@ pub struct Root {
     pub cursor: Option<(u64, u64)>,
     /// which forms are dynamic, and can be replaced
     dynamic_forms: HashSet<u128>,
+    /// Whether or not to log frame dumps
+    debug_frames: bool,
+    /// runtime event buffer
+    runtime_events: Vec<WrbEvent>,
 }
 
 /// An update to the root pane
 #[derive(Clone, Debug)]
 pub struct FrameUpdate {
     pub new_contents: Vec<Box<dyn WrbForm>>,
+    pub updated_viewports: Vec<Viewport>,
 }
 
 impl Root {
@@ -251,6 +258,8 @@ impl Root {
             forms: HashMap::new(),
             cursor: None,
             dynamic_forms: HashSet::new(),
+            debug_frames: true,
+            runtime_events: vec![],
         }
     }
 
@@ -277,7 +286,6 @@ impl Root {
         zbuff
     }
 
-    #[cfg(test)]
     pub(crate) fn dump_zbuff(zbuff: &[ZBuffEntry], num_cols: u64) -> String {
         let mut output = String::new();
         for (i, zb) in zbuff.iter().enumerate() {
@@ -295,7 +303,17 @@ impl Root {
 
     /// Calculate the frame to render as a charbuff
     fn make_charbuff(&mut self) -> CharBuff {
+        if self.debug_frames {
+            for vp in self.viewports().iter() {
+                wrb_debug!("Viewport {}\n{}", vp.id, &vp.dump_viewport());
+            }
+        }
+
         let zbuff = self.zbuff.take().unwrap_or(self.make_zbuff());
+        if self.debug_frames {
+            wrb_debug!("ZBuff:\n{}", &Self::dump_zbuff(&zbuff, 120));
+        }
+
         let mut buff = CharBuff::new(self.num_cols);
         for (i, vpe) in zbuff.iter().enumerate() {
             let iu64 = u64::try_from(i).expect("Infallible");
@@ -330,6 +348,14 @@ impl Root {
                 buff.cells.push(CharCell::Blank);
             }
         }
+
+        if self.debug_frames {
+            wrb_debug!(
+                "Charbuff:\n{}",
+                CharBuff::dump_charbuff(&buff, self.num_rows)
+            );
+        }
+
         self.zbuff = Some(zbuff);
         buff
     }
@@ -405,6 +431,16 @@ impl Root {
             forms.remove(&old_form_id);
         }
 
+        // merge viewport settings
+        for vp in frame_update.updated_viewports.iter() {
+            let viewport_id = vp.id;
+            let Some(viewport) = self.viewport_mut(viewport_id) else {
+                continue;
+            };
+            wrb_debug!("Update viewport {}", viewport_id);
+            viewport.merge_update(&vp);
+        }
+
         // clear dirty viewports
         for (_element_id, ui_content) in forms.iter() {
             let viewport_id = ui_content.viewport_id();
@@ -425,6 +461,12 @@ impl Root {
         // redraw static forms and re-compute their cursors
         for (_element_id, ui_content) in forms.iter_mut() {
             let viewport_id = ui_content.viewport_id();
+            let Some(viewport) = self.viewport_mut(viewport_id) else {
+                continue;
+            };
+            if !viewport.visible() {
+                continue;
+            };
             let cursor = viewport_cursors
                 .get(&viewport_id)
                 .cloned()
@@ -440,6 +482,12 @@ impl Root {
         for mut ui_content in frame_update.new_contents.into_iter() {
             let element_id = ui_content.element_id();
             let viewport_id = ui_content.viewport_id();
+            let Some(viewport) = self.viewport_mut(viewport_id) else {
+                continue;
+            };
+            if !viewport.visible() {
+                continue;
+            };
             let cursor = viewport_cursors
                 .get(&viewport_id)
                 .cloned()
@@ -621,24 +669,49 @@ impl Root {
     }
 
     /// Handle a form event. Pass it to the focused form.
-    pub fn handle_event(&mut self, event: WrbFormEvent) -> Result<Option<Value>, Error> {
+    /// Coalesce when possible.
+    pub fn handle_event(&mut self, event: WrbFormEvent) -> Result<(), Error> {
         let Some(focused) = self.focused else {
             wrb_debug!("No form focused; dropping event {:?}", &event);
-            return Ok(None);
+            return Ok(());
         };
 
         // take ownership to avoid multiple mutable references
         let Some(mut form) = self.forms.remove(&focused) else {
             wrb_debug!("No such form {}; dropping event {:?}", focused, &event);
-            return Ok(None);
+            return Ok(());
         };
 
         wrb_debug!("Pass event to form {}: {:?}", focused, &event);
-        let res = form.handle_event(self, event);
+        let runtime_event_payload = form.handle_event(self, event)?;
+
+        let runtime_event_opt = runtime_event_payload.map(|event_payload| {
+            let runtime_event = WrbEvent::UI {
+                element_type: form.type_id(),
+                element_id: form.element_id(),
+                event_payload,
+            };
+            wrb_debug!(
+                "Received runtime event from form {}: {:?}",
+                focused,
+                &runtime_event
+            );
+            runtime_event
+        });
 
         // restore form ownership to root
         self.forms.insert(focused, form);
-        res
+
+        if let Some(runtime_event) = runtime_event_opt {
+            self.runtime_events.push(runtime_event);
+        }
+        Ok(())
+    }
+
+    /// Consume runtime events
+    pub fn consume_runtime_events(&mut self) -> Vec<WrbEvent> {
+        let events = std::mem::replace(&mut self.runtime_events, vec![]);
+        events
     }
 
     /// resolve a row/column within a form to the absolute row/column

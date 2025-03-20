@@ -279,7 +279,7 @@ impl Wrbpod {
                 break;
             };
 
-            if *signer == addr {
+            if signer.bytes() == addr.bytes() {
                 available.push(slot_id);
             }
         }
@@ -334,6 +334,10 @@ impl Wrbpod {
 
         if available_slots.len() == wrbpod_slots.len() {
             // superblock is not available to us
+            wrb_info!(
+                "No superblock slot available for {}",
+                &StacksAddress::p2pkh(true, &StacksPublicKey::from_private(&privkey))
+            );
             return Err(Error::NoSuperblock);
         }
 
@@ -461,7 +465,7 @@ impl Wrbpod {
                 .sign(&self.privkey)
                 .map_err(|_| Error::Codec(CodecError::SerializeError("Failed to sign".into())))?;
 
-            wrb_test_debug!(
+            wrb_debug!(
                 "Signed superblock slot {} {}: {:?}",
                 self.superblock_slot_id,
                 StacksAddress::p2pkh(true, &StacksPublicKey::from_private(&self.privkey)),

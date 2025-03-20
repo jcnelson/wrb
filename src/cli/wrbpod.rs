@@ -45,6 +45,7 @@ use crate::vm::ClarityVM;
 use crate::util::privkey_to_principal;
 use crate::util::{DEFAULT_WRB_CLARITY_VERSION, DEFAULT_WRB_EPOCH};
 
+use crate::storage::mock::{LocalStackerDBClient, LocalStackerDBConfig};
 use crate::storage::StackerDBClient;
 use crate::storage::Wrbpod;
 use crate::storage::WrbpodAddress;
@@ -606,6 +607,16 @@ fn wrbpod_deploy(
     Some(txid)
 }
 
+/// Instantiate a mocked stackerdb
+fn wrbpod_mock_stackerdb(path: &str, config: LocalStackerDBConfig) {
+    if std::fs::metadata(path).is_ok() {
+        let _ = std::fs::remove_file(path).expect(&format!("FATAL: could not remove '{}'", path));
+    }
+
+    let _ = LocalStackerDBClient::open_or_create(path, config)
+        .expect("Failed to instantiate mocked StackerDB");
+}
+
 /// wrbpod subcommand helper
 /// Commands start at argv[2]
 pub fn subcommand_wrbpod(mut argv: Vec<String>, wrbsite_data_source_opt: Option<String>) {
@@ -977,6 +988,24 @@ pub fn subcommand_wrbpod(mut argv: Vec<String>, wrbsite_data_source_opt: Option<
             process::exit(1);
         };
         println!("{}", &txid);
+        return;
+    } else if cmd == "mock-stackerdb" {
+        if argv.len() < 5 {
+            eprintln!(
+                "Usage: {} wrbpod {} /path/to/config.json /path/to/db.sqlite",
+                &argv[0], &cmd
+            );
+            process::exit(1);
+        }
+
+        let config_json = load_from_file_or_stdin(&argv[3]);
+        let config: LocalStackerDBConfig =
+            serde_json::from_slice(&config_json).unwrap_or_else(|e| {
+                panic!("FATAL: could not decode config: {:?}", &e);
+            });
+
+        wrbpod_mock_stackerdb(&argv[4], config);
+        eprintln!("Database created");
         return;
     }
 

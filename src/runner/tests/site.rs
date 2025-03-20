@@ -185,7 +185,7 @@ fn test_dns_wrb_txt_codec() {
 
 #[test]
 fn test_wrbsite_load_from_zonefile_rec() {
-    let pkey = StacksPrivateKey::new();
+    let pkey = StacksPrivateKey::random();
 
     let mut pubkey = StacksPublicKey::from_private(&pkey);
     pubkey.set_compressed(true);
@@ -274,7 +274,7 @@ fn wrbrec_to_zonefile(wrbrec: WrbTxtRecordV1) -> Vec<u8> {
 
 #[test]
 fn test_wrbsite_load_from_zonefile() {
-    let pkey = StacksPrivateKey::new();
+    let pkey = StacksPrivateKey::random();
 
     let mut pubkey = StacksPublicKey::from_private(&pkey);
     pubkey.set_compressed(true);
@@ -401,7 +401,7 @@ fn test_wrbsite_load_from_zonefile() {
 
 #[test]
 fn test_wrbsite_load_ext() {
-    let pkey = StacksPrivateKey::new();
+    let pkey = StacksPrivateKey::random();
 
     let mut pubkey = StacksPublicKey::from_private(&pkey);
     pubkey.set_compressed(true);

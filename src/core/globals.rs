@@ -34,6 +34,8 @@ use rand::thread_rng;
 use rand::Rng;
 use rand::RngCore;
 
+use clarity::vm::contracts::Contract;
+
 /// Globally-accessible state that is hard to pass around otherwise
 pub struct Globals {
     pub config: Option<Config>,
@@ -43,6 +45,10 @@ pub struct Globals {
     pub wrbpod_addr_to_session_id: HashMap<WrbpodAddress, u128>,
     /// Next wrbpod session ID
     next_wrbpod_session_id: u128,
+    /// large strings that can't easily be dealt with in Clarity
+    large_strings: HashMap<u128, String>,
+    /// cached contract contexts
+    cached_contracts: HashMap<QualifiedContractIdentifier, Contract>,
 }
 
 impl Default for Globals {
@@ -52,6 +58,8 @@ impl Default for Globals {
             wrbpod_sessions: HashMap::new(),
             wrbpod_addr_to_session_id: HashMap::new(),
             next_wrbpod_session_id: 0,
+            large_strings: HashMap::new(),
+            cached_contracts: HashMap::new(),
         }
     }
 }
@@ -118,6 +126,41 @@ impl Globals {
         let session_id = self.get_wrbpod_session_id_by_address(wrbpod_addr)?;
         self.get_wrbpod_session(session_id)
     }
+
+    pub fn store_large_string_utf8(&mut self, handle: u128, string: String) {
+        self.large_strings.insert(handle, string);
+    }
+
+    pub fn load_large_string_utf8(&mut self, handle: u128) -> Option<String> {
+        self.large_strings.get(&handle).cloned()
+    }
+
+    pub fn store_cached_contract(
+        &mut self,
+        contract_id: QualifiedContractIdentifier,
+        contract: Contract,
+    ) -> Contract {
+        self.cached_contracts.insert(
+            contract_id,
+            Contract {
+                contract_context: contract.contract_context.clone(),
+            },
+        );
+        contract
+    }
+
+    pub fn load_cached_contract(
+        &mut self,
+        contract_id: &QualifiedContractIdentifier,
+    ) -> Option<Contract> {
+        if let Some(contract) = self.cached_contracts.get(contract_id) {
+            Some(Contract {
+                contract_context: contract.contract_context.clone(),
+            })
+        } else {
+            None
+        }
+    }
 }
 
 lazy_static! {
@@ -126,6 +169,8 @@ lazy_static! {
         wrbpod_addr_to_session_id: HashMap::new(),
         wrbpod_sessions: HashMap::new(),
         next_wrbpod_session_id: 0,
+        large_strings: HashMap::new(),
+        cached_contracts: HashMap::new(),
     });
     pub static ref LOGFILE: Mutex<Option<File>> = Mutex::new(Some(
         File::options()

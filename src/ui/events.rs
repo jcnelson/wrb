@@ -51,8 +51,7 @@ use clarity::vm::SymbolicExpression;
 use crate::vm::ClarityStorage;
 
 use crate::vm::{
-    clarity_vm::parse as clarity_parse, clarity_vm::run_analysis_free as clarity_analyze,
-    ClarityVM, WRBLIB_CODE,
+    clarity_vm::parse as clarity_parse, clarity_vm::run_analysis_free as clarity_analyze, ClarityVM,
 };
 
 use clarity::vm::database::{HeadersDB, NULL_BURN_STATE_DB};
@@ -80,7 +79,7 @@ pub enum WrbEvent {
     Close,
     /// The timer went off
     Timer,
-    /// A resize happened
+    /// A resize happened. New size is (row,col)
     Resize(u64, u64),
     /// A UI event happened.
     UI {
@@ -121,11 +120,7 @@ impl WrbEvent {
             Self::Close => 0,
             Self::Timer => 1,
             Self::Resize(_, _) => 2,
-            Self::UI {
-                element_type,
-                element_id: _,
-                event_payload: _,
-            } => element_type.as_u128(),
+            Self::UI { .. } => 4,
         }
     }
 
@@ -242,8 +237,8 @@ pub struct WrbChannels {}
 
 impl WrbChannels {
     pub fn new() -> (WrbRenderEventChannels, WrbUIEventChannels) {
-        let (events_channel_sender, events_channel_receiver) = sync_channel(1);
-        let (root_channel_sender, root_channel_receiver) = sync_channel(1);
+        let (events_channel_sender, events_channel_receiver) = sync_channel(1024);
+        let (root_channel_sender, root_channel_receiver) = sync_channel(1024);
 
         let ui_channels = WrbUIEventChannels {
             events: events_channel_sender,
@@ -260,7 +255,7 @@ impl WrbChannels {
 impl Renderer {
     /// Go find the name of the event loop function, and make sure it has the right type.
     pub(crate) fn find_event_loop_function(
-        &self,
+        &mut self,
         wrb_tx: &mut WritableWrbStore,
         headers_db: &dyn HeadersDB,
         main_code_id: &QualifiedContractIdentifier,
@@ -370,7 +365,7 @@ impl Renderer {
 
     /// Go find event subscriptions.
     pub(crate) fn find_event_subscriptions(
-        &self,
+        &mut self,
         wrb_tx: &mut WritableWrbStore,
         headers_db: &dyn HeadersDB,
         main_code_id: &QualifiedContractIdentifier,
@@ -414,7 +409,7 @@ impl Renderer {
 
     /// Go get the event loop delay
     pub(crate) fn find_event_loop_delay(
-        &self,
+        &mut self,
         wrb_tx: &mut WritableWrbStore,
         headers_db: &dyn HeadersDB,
         main_code_id: &QualifiedContractIdentifier,
@@ -448,7 +443,7 @@ impl Renderer {
     /// Run the event loop with a given event.
     /// Returns whatever the event loop function returns.
     pub(crate) fn run_one_event_loop_pass(
-        &self,
+        &mut self,
         wrb_tx: &mut WritableWrbStore,
         headers_db: &dyn HeadersDB,
         main_code_id: &QualifiedContractIdentifier,
@@ -481,39 +476,20 @@ impl Renderer {
         Ok(res)
     }
 
-    /// Link code with wrblib
-    pub(crate) fn wrb_link(code: &str) -> String {
-        let linked_code = format!(
-            "{}\n;; ============= END OF WRBLIB ===================\n{}",
-            WRBLIB_CODE, code
-        );
-        linked_code
-    }
-
     /// Run the main loop in an interactive setting
     /// Returns the last thing the event loop returns.
     /// Returns None if there's no event loop function defined.
     pub fn run_page(
-        &self,
+        &mut self,
         vm: &mut ClarityVM,
         compressed_input: &[u8],
         channels: WrbRenderEventChannels,
     ) -> Result<Option<Value>, Error> {
-        let input = self.read_as_ascii(&mut &compressed_input[..])?;
-        let linked_code = Self::wrb_link(&input);
-        let main_code_id = vm.get_code_id();
+        let app_code = self.read_as_ascii(&mut &compressed_input[..])?;
+        let main_code_id = vm.initialize_app(&app_code)?;
+
         let headers_db = vm.headers_db();
-
-        let code_hash = Hash160::from_data(compressed_input);
-        let mut wrb_tx = vm.begin_page_load(&code_hash)?;
-
-        // instantiate and run main code
-        self.initialize_main(&mut wrb_tx, &headers_db, &main_code_id, &linked_code)?;
-        wrb_tx.commit()?;
-
-        let mut wrb_tx = vm.begin_page_load(&code_hash)?;
-
-        // TODO: if any modules are declared, load them up and instantiate them here
+        let mut wrb_tx = vm.begin_page_load()?;
 
         // set up event loop
         let event_loop_func_opt =
@@ -535,7 +511,7 @@ impl Renderer {
                 .destruct()
                 .expect("Failed to recover database reference after executing transaction");
 
-            db.roll_back()?;
+            db.commit()?;
 
             let _ = channels.next_frame(root);
             wrb_tx.commit()?;
@@ -574,21 +550,39 @@ impl Renderer {
 
             wrb_debug!("Got event: {:?}", &next_event);
 
+            wrb_debug!("Running event loop pass");
+            event_loop_result = match self.run_one_event_loop_pass(
+                &mut wrb_tx,
+                &headers_db,
+                &main_code_id,
+                &event_loop_func,
+                next_event,
+            ) {
+                Ok(result) => {
+                    wrb_debug!("Event loop returned: {:?}", &result);
+                    Some(result)
+                }
+                Err(e) => {
+                    wrb_warn!("Failed to run event loop: {:?}", &e);
+                    break;
+                }
+            };
+
             // got an event we can handle
-            if let Some(viewports) = root_viewports.as_ref() {
+            if root_viewports.is_some() {
                 // make a frame update
                 let mut db = wrb_tx.get_clarity_db(&headers_db, &NULL_BURN_STATE_DB);
                 db.begin();
 
                 let mut vm_env =
                     OwnedEnvironment::new_free(true, DEFAULT_CHAIN_ID, db, DEFAULT_WRB_EPOCH);
-                let root_update = self.make_root_update(&mut vm_env, &main_code_id, viewports)?;
+                let root_update = self.make_root_update(&mut vm_env, &main_code_id)?;
 
                 let (mut db, _) = vm_env
                     .destruct()
                     .expect("Failed to recover database reference after executing transaction");
 
-                db.roll_back()?;
+                db.commit()?;
 
                 if !channels.next_frame_update(root_update) {
                     // channel broken
@@ -615,7 +609,7 @@ impl Renderer {
                     .destruct()
                     .expect("Failed to recover database reference after executing transaction");
 
-                db.roll_back()?;
+                db.commit()?;
 
                 if !channels.next_frame(root) {
                     // channel broken
@@ -626,24 +620,6 @@ impl Renderer {
                 // send updates from now on
                 root_viewports = Some(viewports);
             }
-
-            wrb_debug!("Running event loop pass");
-            event_loop_result = match self.run_one_event_loop_pass(
-                &mut wrb_tx,
-                &headers_db,
-                &main_code_id,
-                &event_loop_func,
-                next_event,
-            ) {
-                Ok(result) => {
-                    wrb_debug!("Event loop returned: {:?}", &result);
-                    Some(result)
-                }
-                Err(e) => {
-                    wrb_warn!("Failed to run event loop: {:?}", &e);
-                    break;
-                }
-            };
         }
 
         wrb_debug!("Event loop finished");

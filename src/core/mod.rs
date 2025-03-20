@@ -114,11 +114,18 @@ pub fn make_runner() -> Runner {
     let (node_host, node_port) =
         with_global_config(|cfg| cfg.get_node_addr()).expect("FATAL: system not initialized");
 
-    let (bns_contract_id, zonefile_contract_id) =
-        with_global_config(|cfg| (cfg.get_bns_contract_id(), cfg.get_zonefile_contract_id()))
-            .expect("FATAL: system not initialized");
+    let (bns_contract_id, zonefile_contract_id, mock_stackerdb_paths) = with_global_config(|cfg| {
+        (
+            cfg.get_bns_contract_id(),
+            cfg.get_zonefile_contract_id(),
+            cfg.mock_stackerdb_paths().clone(),
+        )
+    })
+    .expect("FATAL: system not initialized");
 
-    let runner = Runner::new(bns_contract_id, zonefile_contract_id, node_host, node_port);
+    let runner = Runner::new(bns_contract_id, zonefile_contract_id, node_host, node_port)
+        .with_mock_stackerdb_paths(mock_stackerdb_paths);
+
     runner
 }
 

@@ -234,16 +234,23 @@ fn main() {
     // load the page
     let mut vm =
         ClarityVM::new(&db_path, &wrbsite_name, version).expect("Failed to instantiate ClarityVM");
-    let renderer = Renderer::new(1_000_000_000);
+    let mut renderer = Renderer::new(1_000_000_000);
 
     let (render_channels, ui_channels) = WrbChannels::new();
 
     let event_pipe = ui_channels.get_event_sender();
     let viewer = Viewer::new(ui_channels, &wrbsite_name);
 
-    let render_handle = thread::spawn(move || renderer.run_page(&mut vm, &bytes, render_channels));
+    let render_event_pipe = event_pipe.clone();
+    let render_handle = thread::spawn(move || {
+        if let Err(e) = renderer.run_page(&mut vm, &bytes, render_channels) {
+            wrb_error!("Failed to run page: {:?}", &e);
+            let _ = render_event_pipe.send(WrbEvent::Close);
+        }
+    });
 
     let _ = viewer.main();
     let _ = event_pipe.send(WrbEvent::Close);
     let _ = render_handle.join();
+    process::exit(0);
 }

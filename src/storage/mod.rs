@@ -20,6 +20,8 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 
+use rusqlite::Error as sqlite_error;
+
 use stacks_common::util::secp256k1::Secp256k1PrivateKey;
 use stacks_common::util::secp256k1::Secp256k1PublicKey;
 
@@ -33,7 +35,7 @@ use stacks_common::util::hash::{hex_bytes, to_hex};
 use clarity::vm::types::QualifiedContractIdentifier;
 
 use crate::runner::Error as RuntimeError;
-
+use crate::util::sqlite::Error as DBError;
 use libstackerdb::{SlotMetadata, StackerDBChunkAckData, StackerDBChunkData};
 
 use serde;
@@ -44,6 +46,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 pub mod tests;
 
+pub mod mock;
 pub mod wrbpod;
 
 pub const WRBPOD_SLICES_VERSION: u8 = 0;
@@ -304,6 +307,9 @@ pub enum Error {
     NoSuchChunk,
     NoSpace,
     NoSuperblock,
+    NoSuchRow,
+    AlreadyExists,
+    DBError(DBError),
 }
 
 impl From<RuntimeError> for Error {
@@ -315,6 +321,18 @@ impl From<RuntimeError> for Error {
 impl From<CodecError> for Error {
     fn from(e: CodecError) -> Self {
         Self::Codec(e)
+    }
+}
+
+impl From<DBError> for Error {
+    fn from(e: DBError) -> Self {
+        Self::DBError(e)
+    }
+}
+
+impl From<sqlite_error> for Error {
+    fn from(e: sqlite_error) -> Self {
+        Self::DBError(DBError::SqliteError(e))
     }
 }
 
